@@ -1,0 +1,2360 @@
+---
+title: ""
+output: 
+  pdf_document
+header-includes: 
+- \usepackage{pdflscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage{caption} 
+- \captionsetup[table]{labelformat=empty} 
+- \captionsetup[figure]{labelformat=empty}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r package-loading-and-options, include=FALSE}
+library(conflicted)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(arrow)
+library(readxl)
+library(VISCfunctions)
+library(janitor)
+library(scales)
+library(here)
+library(broom)
+library(biostat3)
+library(msm)
+library(car)
+library(AICcmodavg)
+library(cowplot)
+library(magick)
+library(ggsignif)
+library(gtable)
+library(ggprism)
+
+
+# knitr options
+opts_chunk$set(cache = FALSE, message = TRUE, warning = TRUE, echo = FALSE, 
+               dev = c("png", "pdf"), dpi = 200, out.width = '100%', 
+               out.extra = '', fig.align = "center", fig.pos = "H")
+
+# NA's will be blank in tables
+options(knitr.kable.NA = '')
+
+# Create a theme 
+visc_theme <- theme_bw() + 
+  theme(
+    legend.position = "bottom", 
+    legend.margin = margin(unit = "cm"),
+    panel.grid.minor = element_blank()
+    )
+
+theme_set(visc_theme)
+
+model_colors = scales::viridis_pal()(5)[-5]
+names(model_colors) = c('Null','Dose','Allele','Full')
+
+#RColorBrewer::brewer.pal(12,'Paired')
+trt_colors = c(
+  `Placebo` = "#A6A7A8",
+  `20 µg` = "#A6CEE3",
+  `100 µg` = "#1F78B4"
+)
+genotype_colors = scales::viridis_pal()(18)[c(1,2,4,6,8,10,12,14,16)]
+allele_full_colors = scales::viridis_pal()(10)[c(1,2,4,6,8)]
+names(allele_full_colors) = c('*02','*02_S4953','*04','*05','*06')
+allele_colors = allele_full_colors[c('*02','*04','*05','*06')]
+allele_shapes = c(c('*02'=16,'*04'=15,'*05'=3,'*06'=17))
+```
+
+```{r conflicted-preferences, message=FALSE}
+conflict_prefer("filter", "dplyr")
+conflict_prefer("fisher.test", "stats")
+conflict_prefer("summarise", "dplyr")
+conflict_prefer("summarize", "dplyr")
+conflict_prefer("rename", "dplyr")
+conflict_prefer("mutate", "dplyr")
+conflict_prefer("arrange", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("here", "here")
+```
+
+```{r word-pdf-options}
+
+output_type <- 'pandoc'
+
+kable_warnings <- FALSE
+pandoc_markup <- TRUE
+```
+
+```{r data-loading, message=FALSE}
+
+#treatment assignments
+treat_info = read_csv('https://raw.githubusercontent.com/SchiefLab/G001/main/data/groups/G001treatment.csv') %>%
+  rename(pubid = `Volunteer Study ID`) %>%
+  mutate(ID = sub('PubID_', '', pubid))
+
+#Getting visit info
+visit_info = read.csv('../data/visit_info.csv')
+
+# read in supp data s1
+data_s1 = read_excel('../data/Data S1.xlsx') %>%
+  rename(pubid = `IAVI G001 PubID`,
+         Allele = name)
+
+# Reading in the bcell results
+bcell_data_org = read_csv('https://raw.githubusercontent.com/SchiefLab/G001/main/data/combined_results/Flow_Seq_Results_with_calls.csv')
+
+
+# Readin in the sequence results
+seq_data_org = read_csv('https://github.com/SchiefLab/G001/raw/main/data/figures/sequences/unblinded_sequences.csv.gz')
+
+```
+
+```{r data-processing, echo=FALSE}
+
+geno_data <- data_s1 %>%
+  select(Allele, pubid) %>%
+  rename(allele = Allele) %>% 
+  distinct(allele, pubid) %>%
+  mutate(allele_full = str_replace(allele, 'IGHV1-2', ''),
+         allele = str_remove(allele_full, '_S4953')) %>%
+  group_by(pubid) %>%
+  reframe(
+    genotype_full = case_when(
+      n() == 1 ~ paste0(allele_full, '/', allele_full),
+      n() == 2 ~ paste0(allele_full, collapse = '/')
+    ),
+    genotype=sub('_S4953', '', genotype_full),
+    n02 = str_count(genotype, fixed('*02')),
+    n04 = str_count(genotype, fixed('*04')),
+    n05 = str_count(genotype, fixed('*05')),
+    n06 = str_count(genotype, fixed('*06')),
+    n0506 = n05 + n06,
+    homozygous02 = genotype=='*02/*02',
+    homozygous04 = genotype=='*04/*04',
+    homozygous = homozygous02 | homozygous04,
+    heterozygous0204 = genotype=='*02/*04'
+  ) %>%
+  unique()
+
+stopifnot(nrow(geno_data)==48)
+
+
+
+
+# Barcode frequencies. 
+rep_freq = data_s1 %>%
+  rename(freq = barcodes_exact_freq) %>%
+  select(freq, pubid, Library, Allele) %>%
+  rename('allele_full'='Allele') %>%
+  mutate(allele = allele_full %>% str_remove('IGHV1-2') %>% str_remove('_S4953')) %>%
+  pivot_wider(id_cols=c(pubid, allele_full, allele), names_prefix='freq', names_from = Library, values_from = freq) %>%
+  group_by(pubid,allele) %>%
+  summarise(freq1=sum(freqLeader), freq2=sum(freqUTR), .groups = 'drop') %>%
+  mutate(freq=(freq1+freq2)/2)
+
+rep_freq0204 = rep_freq %>% 
+  filter(allele %in% c('*02','*04')) %>% 
+  group_by(pubid, allele) %>% 
+  summarize(freq=sum(freq), allele=str_replace(allele, fixed('*'), ''), .groups='drop') %>%
+  pivot_wider(id_cols = pubid, names_prefix = 'freq', names_from = allele, values_from = freq, values_fill = 0) %>%
+  mutate(freq0204 = freq02 + freq04)
+
+cdr3_data = data_s1 %>%
+  rename(allele_full = Allele) %>%
+  mutate(allele = allele_full %>% str_remove('IGHV1-2') %>% str_remove('_S4953')) %>%
+  left_join(treat_info, by='pubid') %>%
+  pivot_wider(id_cols=c(pubid, allele_full, allele), 
+              names_from = Library, 
+              values_from=c(barcodes_exact, barcodes_exact_freq, CDR3s_exact, CDR3s_exact_freq)) %>%
+  group_by(pubid,allele) %>%
+  summarise(n = n(), 
+            CDR3s_cnt=(sum(CDR3s_exact_Leader)+sum(CDR3s_exact_UTR))/2, 
+            CDR3s_freq=(sum(CDR3s_exact_freq_Leader)+sum(CDR3s_exact_freq_UTR))/2, 
+            barcodes_cnt=(sum(barcodes_exact_Leader)+sum(barcodes_exact_UTR))/2, 
+            barcodes_freq=(sum(barcodes_exact_freq_Leader)+sum(barcodes_exact_freq_UTR))/2, 
+            .groups = 'drop') %>% 
+  left_join(geno_data %>% select(pubid, genotype, homozygous), by='pubid')
+
+
+naive0204 = cdr3_data %>% 
+  filter(allele %in% c('*02','*04')) %>% 
+  group_by(pubid, allele) %>% 
+  summarize(barcodes_freq=sum(barcodes_freq), 
+            barcodes_cnt=sum(barcodes_cnt), 
+            CDR3s_freq=sum(CDR3s_freq), 
+            CDR3s_cnt=sum(CDR3s_cnt), 
+            allele=str_replace(allele, fixed('*'), ''), .groups='drop') %>%
+  pivot_wider(id_cols = pubid, 
+              names_from = allele, 
+              values_from = c('barcodes_freq','barcodes_cnt','CDR3s_freq','CDR3s_cnt'), 
+              values_fill = 0
+  ) %>%
+  mutate(barcodes_freq=barcodes_freq_02 + barcodes_freq_04,
+         barcodes_cnt=barcodes_freq_02 + barcodes_freq_04,
+         CDR3s_freq=CDR3s_freq_02 + CDR3s_freq_04,
+         CDR3s_cnt=CDR3s_cnt_02 + CDR3s_cnt_04)
+
+seq_data <- seq_data_org %>%
+  mutate(
+    # Tissue_heavy and Tissue_light should always match
+    Tissue = tissue_heavy %>% str_to_title(),
+    ighv = ifelse(str_detect(v_call_heavy, ','), 'Ambiguous', v_call_heavy), 
+    `is_IGHV1-2` = grepl('IGHV1-2*', v_call_heavy, fixed=TRUE)
+  ) %>%
+  left_join(geno_data, by = 'pubid') 
+
+
+bcell_adata <- bcell_data_org %>% 
+  rename(pubid = 'PTID') %>% # note, the bcell_data_org$PTID column encodes the G001 PubID not the study ptid
+  left_join(geno_data, by = 'pubid') %>% 
+  mutate( IgG_Bcells = ifelse(Visit %in% c('V07A') & !is.na(`Number of IgD- B cells`), 
+                              `Number of IgD- B cells`,`Number of IgD-IgG+ B cells`)
+  ) %>%
+  mutate(
+    # Making specific calls using just the >0 VRC01 rule
+    Response2 = ifelse(
+      is.na(`Response (missing seq to 0)`),
+      NA, 
+      `Number of epitope-specific (KO-GT8++) sequenced IgG BCRs that are VRC01-class` > 0
+      ) %>% as.numeric(),
+   
+    Imputed_VRC01 = round_away_0( IgG_Bcells * 
+                                  `Percent of IgG+ B cells detected as VRC01-class` / 100 )
+  ) %>%
+  # keeping original names for other code that will use them
+  # rename(
+  mutate(
+         nsequenced = `Number of epitope-specific (KO-GT8++) IgG+ B cells that have BCR heavy and light chains sequenced`,
+         vrc01 = `Number of epitope-specific (KO-GT8++) sequenced IgG BCRs that are VRC01-class`,
+         ep_specific = `Number of epitope-specific (KO-GT8++) IgG+ B cells`,
+         pbmc = `Number of PBMCs sorted (Lymphocytes/Singlets)`,
+         percent_ep_specific = `Percent of IgG+ B cells that are epitope-specific (KO-GT8++)`,
+         percent_vrc01_sequenced = `Percent of epitope-specific (KO-GT8++) sequenced IgG BCRs that are VRC01-class`,
+         percent_vrc01 = `Percent of IgG+ B cells detected as VRC01-class`
+         )
+
+model_data <- bcell_adata %>% 
+  mutate(
+    Treatment = Treatment %>% fct_relevel('DPBS sucrose',
+                                          '20 µg eOD-GT8 60mer + AS01B',
+                                          '100 µg eOD-GT8 60mer + AS01B'),
+    Treat_Short = Treatment %>% 
+      fct_relabel(~.x %>% str_replace(' µg eOD-GT8 60mer \\+ AS01B','µg')) %>% 
+      fct_recode(`Placebo` = 'DPBS sucrose'),
+  ) %>%
+  filter(!is.na(Imputed_VRC01), 
+         Treat_Short != 'Placebo'
+         ) %>% 
+  mutate(
+    Treat_num = Treat_Short %>% fct_drop() %>% as.numeric() - 1,
+    Treat_Bcell = Treat_num * IgG_Bcells,
+    exposure_02 = n02 * IgG_Bcells,
+    exposure_04 = n04 * IgG_Bcells,
+    exposure_05 = n05 * IgG_Bcells,
+    exposure_06 = n06 * IgG_Bcells,
+    exposure_0506 = n0506 * IgG_Bcells
+  )  %>%
+  left_join(rep_freq0204, by='pubid') %>%
+  replace_na(list(freq0204=0)) %>%
+  mutate(
+    exposure_freq02 = freq02 * IgG_Bcells,
+    exposure_freq04 = freq04 * IgG_Bcells,
+    exposure_freq0204 = freq0204 * IgG_Bcells
+  )
+
+
+ModelLabels = c(
+  'null' = 'Null',
+  'trt' = 'Dose',
+  'allele' = 'Allele',
+  'full' = 'Full'
+)
+
+## Getting responder only percentages
+bcell_adata_responders <- bcell_adata %>% 
+  mutate(
+    `Percent of IgG+ B cells detected as VRC01-class2` = 
+      ifelse(
+        Response2 == 0,
+        NA,
+        `Percent of IgG+ B cells detected as VRC01-class`
+      ),
+    `Percent of IgG+ B cells detected as VRC01-class` = 
+      ifelse(
+        `Response (missing seq to 0)` == 0 & Visit != 'V02',
+        NA,
+        `Percent of IgG+ B cells detected as VRC01-class`
+      ),
+    `Percent of IgG+ B cells detected as VRC01-class (Baseline Upper Bound)` = 
+      ifelse(
+        `Response (missing seq to 0)` == 0 & Visit != 'V02',
+        NA,
+        `Percent of IgG+ B cells detected as VRC01-class (Baseline Upper Bound)`
+      ),
+    `Percent of IgG+ B cells that are epitope-specific (KO-GT8++)` = 
+      ifelse(
+        Response_Ep_Specific == 0 & Visit != 'V02',
+        NA,
+        `Percent of IgG+ B cells that are epitope-specific (KO-GT8++)`
+      ),
+    `Percent of IgG+ B cells that are GT8++ (without regard to KO binding status)` = 
+      ifelse(
+        Response_Ep_Specific == 0 & Visit != 'V02',
+        NA,
+        `Percent of IgG+ B cells that are GT8++ (without regard to KO binding status)`
+      )
+
+  )
+
+
+```
+
+```{r lookup-tables}
+
+TreatmentLabels = c(
+  `DPBS sucrose` = 'Placebo',
+  `20 µg eOD-GT8 60mer + AS01B` = '20 µg',
+  `100 µg eOD-GT8 60mer + AS01B` = '100 µg'
+)
+
+VisitLabels = c(
+  'V05'='Wk3 GC', 
+  'V06'='Wk4 MBC', 
+  'V07'='Wk8 MBC', 
+  'V07A'='Wk9 PB', 
+  'V08'='Wk10 MBC', 
+  'V09' = 'Wk11 GC', 
+  'V10' = 'Wk16 MBC'
+)
+
+SampleLabels = c(
+  'GC' = 'GC B Cells in LNs',
+  'MBC' = 'Memory B Cells in PBMCs',
+  'PB' = 'Plasmablasts in PBMCs'
+)
+
+```
+
+```{r magnitude-testing, warning=FALSE}
+
+# Group magnitude testing
+magnitude_results <- bcell_adata_responders %>%
+   mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
+         genotype_grouped = factor(genotype) %>% 
+            fct_recode(
+              `*02/*02` = '*02/*02', 
+              `*02/*04` = '*02/*04', 
+              `*04/*04` = '*04/*04', 
+              `*04/*05 or *04/*06` = '*04/*05', 
+              `*04/*05 or *04/*06` = '*04/*06', 
+              `*02/*05 or *02/*06` = '*02/*05', 
+              `*02/*05 or *02/*06` = '*02/*06', 
+              `*05/*06` = '*05/*06') %>% 
+            fct_relevel(
+              '*02/*02',
+              '*02/*04',
+              '*02/*05 or *02/*06',
+              '*04/*04',
+              '*04/*05 or *04/*06',
+              '*05/*06'
+            ),
+    Visit = factor(Visit, levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                          labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  filter(Visit != 'V02',
+       !is.na(percent_vrc01),
+       Treatment != 'Placebo',
+       genotype != '*05/*06'
+       ) %>%
+  mutate(Treatment = fct_drop(Treatment)) %>%
+  group_by(Visit, Treatment) %>%
+  group_modify(
+    ~pairwise_test_cont(
+      x = .$`Percent of IgG+ B cells detected as VRC01-class`, 
+      group = .$genotype_grouped, method = 'wilcox', paired = FALSE, 
+      alternative = 'two.sided', num_needed_for_test = 3, digits = 4, 
+      verbose = FALSE
+      ) %>% as.data.frame
+    ) %>% 
+   ungroup() %>% 
+  mutate(
+    adj_p = p.adjust(MagnitudeTest, method = 'fdr'),
+    MagnitudeTest = pretty_pvalues(
+      MagnitudeTest, output_type = output_type, sig_alpha = .05,
+      background = 'yellow',
+      bold = if_else(pandoc_markup , TRUE, FALSE),
+      italic = if_else(pandoc_markup , TRUE, FALSE),
+      digits = 4
+      ),
+    MagnitudeTest_adj = pretty_pvalues(
+      adj_p, output_type = output_type, sig_alpha = .05,
+      background = 'yellow',
+      bold = if_else(pandoc_markup , TRUE, FALSE),
+      italic = if_else(pandoc_markup , TRUE, FALSE),
+      digits = 4
+      )
+    ) %>% 
+  rename("Median (Range)" = Median_Min_Max, 'Mean (SD)' = Mean_SD) %>% 
+  separate(SampleSizes, into = c('n1', 'n2'), sep = ' vs. ', remove = FALSE) %>% 
+  filter(n1 > 1 & n2 > 1)
+
+
+```
+
+```{r magnitude-testing-dose, warning=FALSE}
+
+# Group magnitude testing
+magnitude_results_dose <- bcell_adata_responders %>%
+#  filter(!is.na(`Percent of IgG+ B cells detected as VRC01-class`),
+#         Visit != 'V02', Treat_Short != 'Placebo',
+#         genotype_num != 6) %>% 
+   mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
+         genotype_grouped = factor(genotype) %>% 
+            fct_recode(
+              `*02/*02` = '*02/*02', 
+              `*02/*04` = '*02/*04', 
+              `*04/*04` = '*04/*04', 
+              `*04/*05 or *04/*06` = '*04/*05', 
+              `*04/*05 or *04/*06` = '*04/*06', 
+              `*02/*05 or *02/*06` = '*02/*05', 
+              `*02/*05 or *02/*06` = '*02/*06', 
+              `*05/*06` = '*05/*06') %>% 
+            fct_relevel(
+              '*02/*02',
+              '*02/*04',
+              '*02/*05 or *02/*06',
+              '*04/*04',
+              '*04/*05 or *04/*06',
+              '*05/*06'
+            ),
+    Visit = factor(Visit, levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                          labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  filter(Visit != 'V02',
+       !is.na(percent_vrc01),
+       Treatment != 'Placebo',
+       genotype != '*05/*06'
+       ) %>%
+  mutate(Treatment = fct_drop(Treatment)) %>%
+  group_by(Visit, genotype_grouped) %>%
+  group_modify(
+    ~pairwise_test_cont(
+      x = .$`Percent of IgG+ B cells detected as VRC01-class`, 
+      group = .$Treatment, method = 'wilcox', paired = FALSE, 
+      alternative = 'two.sided', num_needed_for_test = 3, digits = 4, 
+      verbose = FALSE
+      ) %>% as.data.frame
+    ) %>% 
+   ungroup() %>% 
+  mutate(
+    adj_p = p.adjust(MagnitudeTest, method = 'fdr'),
+    MagnitudeTest = pretty_pvalues(
+      MagnitudeTest, output_type = output_type, sig_alpha = .05,
+      background = 'yellow',
+      bold = if_else(pandoc_markup , TRUE, FALSE),
+      italic = if_else(pandoc_markup , TRUE, FALSE),
+      digits = 4
+      ),
+    MagnitudeTest_adj = pretty_pvalues(
+      adj_p, output_type = output_type, sig_alpha = .05,
+      background = 'yellow',
+      bold = if_else(pandoc_markup , TRUE, FALSE),
+      italic = if_else(pandoc_markup , TRUE, FALSE),
+      digits = 4
+      )
+    ) %>% 
+  rename("Median (Range)" = Median_Min_Max, 'Mean (SD)' = Mean_SD) %>% 
+  separate(SampleSizes, into = c('n1', 'n2'), sep = ' vs. ', remove = FALSE) %>% 
+  filter(n1 > 1 & n2 > 1)
+```
+
+```{r MAKE-genotype-cnt-tab, results="asis", warning=kable_warnings}
+
+genotype_cnt = geno_data %>%
+  full_join(treat_info, by = 'pubid') %>%
+  mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
+         genotype=gsub('_S4953', '',genotype)) %>%
+  group_by(Treatment, genotype) %>%
+  summarise(cnt=n(), `.groups`='drop') %>%
+  complete(Treatment, genotype, fill=list(cnt=0))
+
+genotype_cnt_tab = genotype_cnt %>%
+  group_by(genotype) %>%
+  summarise(Treatment='Total', cnt = sum(cnt), .groups='drop') %>%
+  bind_rows(genotype_cnt) %>%
+  pivot_wider(id_cols = Treatment, names_from = genotype, values_from = cnt, values_fill=0) %>%
+  arrange(factor(Treatment))
+
+```
+
+
+```{r MAKE-allele-usage-tab, results="asis", warning=kable_warnings}
+
+allele_usage_tab = rep_freq %>% left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  mutate(per_allele_freq = case_when(
+    homozygous=='Homozygote' ~ freq/2,
+    homozygous=='Heterozygote' ~ freq
+  )) %>%
+group_by(allele, homozygous) %>%
+  summarise(
+    n = n(),
+    mean = mean(per_allele_freq),
+    lci = t.test(per_allele_freq)$conf.int[1],
+    uci = t.test(per_allele_freq)$conf.int[2],
+    min = min(per_allele_freq),
+    max = max(per_allele_freq),
+    `.groups`='drop'
+  )  %>%
+  mutate(
+    allele = ifelse(duplicated(allele), NA, allele),
+    mean = sprintf('%0.2f%%', 100*mean),
+    ci = sprintf('%0.2f%% to %0.2f%%', 100*lci, 100*uci),
+    min = sprintf('%0.2f%%', 100*min),
+    max = sprintf('%0.2f%%', 100*max)
+  ) %>%
+  select(`Allele`=allele, homozygous, `n`=n, `Usage`=mean, `95% CI`=ci, `Min`=min, `Max`=max)
+
+```
+
+
+
+```{r MAKE-usage-comp-tab, results="asis", warning=kable_warnings}
+usage_comp_tab = rep_freq %>% left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  filter(allele %in% c('*02','*04')) %>%
+  mutate(
+    per_allele_freq = case_when(
+      homozygous=='Homozygote' ~ freq/2,
+      homozygous=='Heterozygote' ~ freq
+  )) %>%
+  group_by(allele, homozygous) %>%
+  mutate(
+    n.homo = sum(homozygous=='Homozygous'),
+    n.hetero = sum(homozygous=='Heterozygous'),
+    `.groups`='drop'
+  ) %>%
+  group_by(allele) %>%
+  summarise(
+    # note diff is does not give the correct sign so we need to negate the result
+    diff = as.numeric(-1*diff(t.test(per_allele_freq~homozygous)$estimate)),
+    lci = t.test(per_allele_freq~homozygous)$conf.int[1],
+    uci = t.test(per_allele_freq~homozygous)$conf.int[2],
+    pval = t.test(per_allele_freq~homozygous)$p.value,
+    `.groups`='drop'
+  )  %>%
+  mutate(
+    diff = sprintf('%0.2f%%', 100*diff),
+    ci = sprintf('%0.2f%% to %0.2f%%', 100*lci, 100*uci),
+    pval = sprintf('%0.2f', pval)
+  ) %>%
+  select(c(allele, diff, ci, pval))
+
+```
+
+```{r MAKE-genotype-allele-enrichment-plots, warning=F}
+
+uvallele_cnt = geno_data %>%
+  full_join(treat_info, by = 'pubid') %>%
+  mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
+         genotype=gsub('_S4953', '',genotype)) %>%
+  separate(genotype, into=c('allele1', 'allele2'), sep='/') %>%
+  pivot_longer(cols=c(allele1, allele2), names_to=NULL, values_to = 'allele') %>%
+  unique() %>%
+  group_by(Treatment, allele) %>%
+  summarise(cnt=n(), `.groups`='drop') %>%
+  complete(Treatment, allele, fill=list(cnt=0)) %>%
+  filter(Treatment != 'Placebo') %>%
+  mutate(Treatment = fct_drop(Treatment, only='Placebo'))
+
+# gen Fisher's exact test p-values for each allele
+allele.pvals = c()
+for( aname in levels(factor(uvallele_cnt$allele)) ) {
+  m = uvallele_cnt %>%
+    filter(allele == aname) %>%
+    mutate(w = cnt, wo=18-cnt) %>%
+    select(w, wo) %>%
+    as.matrix()
+  
+  allele.pvals = rbind(allele.pvals, data.frame(allele=aname, pvalue=fisher.test(m)$p.value))
+}
+
+allele.pvals$label = sprintf('P=%0.3f', allele.pvals$pvalue)
+
+genotype_full_cnt = geno_data %>%
+  group_by(genotype_full) %>%
+  summarize(cnt=n(), drop='.groups')
+
+p1 = ggplot(genotype_full_cnt, aes(x=genotype_full, y=cnt, fill=genotype_full)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  scale_fill_manual(name='IGHV1-2 genotype', values=genotype_colors) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        legend.position='none',
+        panel.border = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.line.x.bottom = element_line(colour = "black"),
+        axis.line.y.left = element_line(colour = "black"),
+        panel.spacing = unit(0, "lines"),
+        strip.background = element_blank(),
+        strip.text.x = element_blank()
+    ) +
+  xlab('IGHV1-2 genotype') +
+  ylab('Number of participants')
+
+
+has_allele_cnt = lapply(c('*02', '*02_S4953','*04','*05','*06'), function(a) {
+  cnt = sum(grepl(a, geno_data$genotype_full, fixed = TRUE))
+  data.frame(allele=a, cnt=cnt)
+})
+has_allele_cnt = do.call(rbind, has_allele_cnt)
+
+p2 = ggplot(has_allele_cnt, aes(x=allele, y=cnt, fill=allele)) +
+  geom_bar(stat="identity", width=1, color="white") +
+  scale_fill_manual(name='IGHV1-2 allele', values=allele_full_colors) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+        legend.position='none',
+        panel.border = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.line.x.bottom = element_line(colour = "black"),
+        axis.line.y.left = element_line(colour = "black"),
+        panel.spacing = unit(0, "lines"),
+        strip.background = element_blank(),
+        strip.text.x = element_blank()
+    ) +
+  xlab('IGHV1-2 allele') +
+  ylab('Number of participants')
+
+anno = allele.pvals
+anno$lab = ifelse(anno$pvalue <= 0.05, sprintf('P = %0.3f', anno$pvalue), 'NS')
+anno$Treatment = NA # not sure why this is needed but I get an error in geom_signif if I don't specify Treatment
+anno$y_position=c(18,18,6,6)
+anno$xmin=0.75
+anno$xmax=1.25
+
+p3 = ggplot(uvallele_cnt, aes(x=allele, y=cnt, fill=Treatment)) +
+  geom_bar(stat="identity", position=position_dodge())+#, color='black') +
+  scale_fill_manual(name = "", values = trt_colors[levels(uvallele_cnt$Treatment)]) +
+  scale_y_continuous(breaks=c(0, 5, 10, 15), expand=expansion(add=c(0,1.5))) +
+  xlab('') +
+  ylab('Number of participants') +
+  labs(fill='') +
+  geom_signif( data = anno,
+               aes(y_position=y_position, xmin=xmin, xmax=xmax, annotations=lab),
+               tip_length=0.025, manual = TRUE, textsize = 3.2, vjust = -0.25) +
+  theme( axis.text.x = element_text(angle = 45, vjust = 1, hjust=1),
+         panel.border = element_blank(),
+         panel.grid.major.x = element_blank(),
+         panel.grid.minor = element_blank(),
+         #axis.text.x = element_blank(),
+         axis.ticks.x = element_blank(),
+         axis.ticks.y = element_blank(),
+         axis.line.x.bottom = element_line(colour = "black"),
+         axis.line.y.left = element_line(colour = "black"),
+         panel.spacing = unit(0, "lines"),
+         legend.position = 'bottom',
+         strip.background = element_blank(),
+         strip.text.x = element_blank()
+  ) +
+  facet_grid(.~allele, scale = 'free_x', switch='x')
+
+
+p_abc = plot_grid(p1,p2,p3, nrow=1, labels=c('A', 'B', 'C'))
+
+# saving for composite figure later
+p_genotype=p1
+p_allele=p2
+p_imbalance=p3
+
+```
+
+```{r MAKE-barcode-cdr3-usage-plot, warning=F}
+
+stopifnot(all(rep_freq$freq==cdr3_data$barcodes_freq))
+
+fig_data = cdr3_data %>% 
+  mutate(
+    homozygous = factor(homozygous, 
+                        levels=c(TRUE,FALSE), 
+                        labels=c('Homozygous','Heterozygous')),
+    allele = factor(allele, 
+                    levels=c('*02', '*04','*05','*06'))
+  )
+
+
+set.seed(1)
+p1 = ggplot(fig_data, aes(x=homozygous, y=pmax(barcodes_freq, 0.001), color=allele)) +
+  geom_boxplot(outlier.shape=NA, coef=0) + 
+  geom_jitter(position=position_jitter(0.2)) +
+  xlab('') +
+  ylab('Frequency of mRNA expression') +
+  labs(shape='') +
+  scale_color_manual(name='', values = allele_colors[levels(fig_data$allele)]) +
+  scale_y_continuous(breaks = c(0.1, 1, 10)/100,
+                     minor_breaks = c(seq(0.1,1,by=0.1)/100, seq(1,10,by=1)/100),
+                     labels = c(expression( NULL <= '0.1%'), '1.0%', '10.0%'),
+                     trans = 'log10') +
+  coord_cartesian(ylim=c(0.001,0.1), clip = 'off') +
+  annotation_ticks(sides='l', size=0.4, tick.length = unit(3.2,'pt'), minor.length = unit(3.2,'pt'), outside = TRUE) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 35, vjust = 1, hjust = 1),
+  ) +
+  facet_grid(.~allele, scales = 'free_x', space='free')
+set.seed(1)
+p2 = ggplot(fig_data, aes(x=homozygous, pmax(CDR3s_freq, 0.001), color=allele)) +
+  geom_boxplot(outlier.shape=NA, coef=0) + 
+  geom_jitter(position=position_jitter(0.2)) +
+  xlab('') +
+  ylab('Frequency of unique HCDR3s') +
+  labs(shape='') +
+  scale_color_manual(name='', values = allele_colors[levels(fig_data$allele)]) +
+  scale_y_continuous(breaks = c(0.1, 1, 10)/100,
+                     minor_breaks = c(seq(0.1,1,by=0.1)/100, seq(1,10,by=1)/100),
+                     labels = c(expression( NULL <= '0.1%'), '1.0%', '10.0%'),
+                     trans = 'log10') +
+  coord_cartesian(ylim=c(0.001,0.1), clip = 'off') +
+  annotation_ticks(sides='l', size=0.4, tick.length = unit(3.2,'pt'), minor.length = unit(3.2,'pt'), outside = TRUE) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 35, vjust = 1, hjust = 1),
+  ) +
+  facet_grid(.~allele, scales = 'free_x', space='free')
+
+p_mRNA_freq = p1
+p_cdr3_freq = p2
+
+```
+
+```{r MAKE-barcodes-CDR3-correlations, fig.width=7, fig.height=8.5, fig.cap='Barcodes and CDR3 correlations', warning=F}
+icept1 = mean(log10(cdr3_data$barcodes_cnt/cdr3_data$CDR3s_cnt))
+rho1 =  cor(log10(cdr3_data$barcodes_cnt), log10(cdr3_data$CDR3s_cnt))
+iqr1 = 10^quantile(log10(cdr3_data$CDR3s_cnt/cdr3_data$barcodes_cnt), c(0.25, 0.5, 0.75))
+tmp1 = cdr3_data %>% group_by(allele) %>%
+  summarize(median = 10^median(log10(CDR3s_cnt/barcodes_cnt)))
+med1 = tmp1$median
+names(med1) = tmp1$allele
+
+p1 = ggplot(cdr3_data, aes(y=CDR3s_cnt, x=barcodes_cnt, color=allele, shape=allele)) + 
+  geom_point() +
+  scale_x_log10() +
+  scale_y_log10() +
+  scale_color_manual(name='', values = allele_colors) +
+  scale_shape_manual(name='', values = allele_shapes) +
+  labs(shape = '', y='Unique HCDR3 count', x='mRNA count') +
+  annotate('text', label=sprintf("r = %0.3f", rho1), y=30, x=2000, hjust=0, vjust=2.1, size=3)
+
+
+p2 = ggplot(cdr3_data, aes(y=CDR3s_cnt/barcodes_cnt, x=barcodes_cnt, color=allele, shape=allele)) + 
+  geom_rect(xmin=-Inf, xmax=Inf, ymin=iqr1[1], ymax=iqr1[3], fill='gray', color=NA, alpha=0.1) +
+  geom_hline(yintercept = iqr1[2]) +
+  #geom_hline(aes(yintercept = med1['*02']), color=allele_colors['*02'], linetype='dashed') +
+  #geom_hline(aes(yintercept = med1['*04']), color=allele_colors['*04'], linetype='dashed') +
+  geom_point() +
+  scale_x_log10() +
+  scale_color_manual(name='', values = allele_colors) +
+  scale_shape_manual(name='', values = allele_shapes) +
+  labs(shape = '', y='Ratio of counts', x='mRNA count')
+  
+icept2 = mean(log10(cdr3_data$barcodes_freq/cdr3_data$CDR3s_freq))
+rho2 = cor(log10(cdr3_data$barcodes_freq), log10(cdr3_data$CDR3s_freq))
+iqr2 = 10^quantile(log10(cdr3_data$CDR3s_freq/cdr3_data$barcodes_freq), c(0.25, 0.5, 0.75))
+tmp2 = cdr3_data %>% group_by(allele) %>%
+  summarize(median = 10^median(log10(CDR3s_freq/barcodes_freq)))
+med2 = tmp2$median
+names(med2) = tmp2$allele
+
+p3 = ggplot(cdr3_data, aes(y=CDR3s_freq, x=barcodes_freq, color=allele, shape=allele)) + 
+  geom_point() +
+  scale_y_log10(label=function(x) paste0(100*x, '%')) +
+  scale_x_log10(label=function(x) paste0(100*x, '%')) +
+  expand_limits(x=0.125) + # so x-axis labels not clipped
+  scale_color_manual(name='', values = allele_colors) +
+  scale_shape_manual(name='', values = allele_shapes) +
+  labs(shape = '', y="Freq. of unique HCDR3", x='Freq. of mRNA expression') +
+  annotate('text', label=sprintf("r = %0.3f", rho2), y=0.002, x=0.007, hjust=0, vjust=2.1, size=3)
+
+p4 = ggplot(cdr3_data, aes(y=CDR3s_freq/barcodes_freq, x=barcodes_freq, color=allele, shape=allele)) + 
+  geom_rect(xmin=-Inf, xmax=Inf, ymin=iqr2[1], ymax=iqr2[3], fill='gray', color=NA, alpha=0.1) +
+  geom_hline(yintercept = iqr2[2]) +
+  #geom_hline(aes(yintercept = med2['*02']), color=allele_colors['*02'], linetype='dashed') +
+  #geom_hline(aes(yintercept = med2['*04']), color=allele_colors['*04'], linetype='dashed') +
+  geom_point() +
+  scale_x_log10() +
+  scale_color_manual(name='', values = allele_colors) +
+  scale_shape_manual(name='', values = allele_shapes) +
+  labs(shape = '', y='Ratio of frequencies', x='Freq. of mRNA epxression')
+
+legend = plot_grid(get_legend(p1)) + theme(plot.margin = margin())
+
+p10 = p1 + #theme(plot.margin = margin(c(0,0,0,20)), 
+                 theme(legend.position = 'none', aspect.ratio = 1)
+p20 = p2 + #theme(plot.margin = margin(c(0,0,0,20)), 
+  theme(legend.position = 'none', aspect.ratio = 1)
+p30 = p3 + # theme(plot.margin = margin(c(0,0,0,20)), 
+  theme(legend.position = 'none', aspect.ratio = 1)
+p40 = p4 + #theme(plot.margin = margin(c(0,0,0,20)), 
+  theme(legend.position = 'none', aspect.ratio = 1)
+
+p_barcodes_a = p1
+p_barcodes_b = p2
+p_barcodes_c = p3
+p_barcodes_d = p4
+legend_barcodes = legend
+
+```
+
+
+```{r composite-genotype-mrna-cdr3-plot, fig.pos = 'htbp', fig.width=11, fig.height=10, fig.cap='Composite Genotype-mRNA-HCDR3-Usage-Plot', warnings=FALSE} 
+
+g_genotype = p_genotype + xlab('') + theme(plot.margin = margin(c(0,0,0,30)))
+g_allele = p_allele + xlab('') + theme(plot.margin = margin(c(0,0,0,30)))
+g_imbalance = p_imbalance + theme(legend.position = c(.75,.75)) + theme(plot.margin = margin(c(0,0,0,30)))
+g_mRNA_freq = p_mRNA_freq + ylab('Freq. of mRNA expression') 
+g_cdr3_freq = p_cdr3_freq + ylab('Freq. of unique HCDR3s') 
+
+legend = plot_grid(get_legend(p_barcodes_a))
+g_barcodes_a = p_barcodes_a + theme(legend.position = 'none') 
+g_barcodes_b = p_barcodes_b + theme(legend.position = 'none') 
+g_barcodes_c = p_barcodes_c + theme(legend.position = 'none') 
+g_barcodes_d = p_barcodes_d + theme(legend.position = 'none') 
+
+g_top = plot_grid(NULL,g_genotype, NULL, g_allele, NULL, g_imbalance, NULL, nrow=1, align='h', axis='tb', labels=c('A','','B','','C',''),
+               rel_widths = c(0.5,7.8,0.5,6.2,0.5,9,0.75))
+g_ll = plot_grid(plot_grid(NULL, p_mRNA_freq, labels=c('D',''), rel_widths = c(0.1,2)),
+                 plot_grid(NULL, g_barcodes_a, NULL,NULL, g_barcodes_b, 
+                           rel_widths = c(0.14,1,0.005,0.095,1), nrow=1,
+                           align='h', axis='tb', labels=c('F','','','G','')), 
+                 rel_heights = c(12,8),
+                 nrow=2) %>%
+       plot_grid(NULL, rel_widths = c(1,0.05))
+g_lr = plot_grid(plot_grid(NULL, p_cdr3_freq, labels=c('E'), rel_widths = c(0.1,2)),
+                 plot_grid(NULL,g_barcodes_c, NULL,NULL, g_barcodes_d, 
+                           rel_widths = c(0.14,1,0.05,0.05,1), nrow=1,
+                           align='h', axis='tb', labels=c('H','','','I','')), 
+                 rel_heights = c(12,8),
+                 nrow=2)  %>%
+       plot_grid(NULL, rel_widths = c(1,0.05))
+g_bottom = plot_grid(g_ll, g_lr)
+
+plot_grid(g_top, g_bottom, legend, nrow=3, rel_heights = c(0.8,2.1,0.1))
+
+```
+
+
+```{r MAKE-ratio-tab-boot-vacc}
+# remove placebos and generate the naive repertoire freq usage ratios
+ratio_hetero_vacc = rep_freq %>% left_join(treat_info, by='pubid') %>%
+  filter(Treatment != 'DPBS sucrose') %>%
+  left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  filter(heterozygous0204) %>%
+  mutate(allele0 = allele %>% str_replace('\\*', '')) %>%
+  pivot_wider(id_cols=c(pubid), names_prefix='freq', names_from = allele0, values_from = freq) %>%
+  mutate(ratio = freq02/freq04)
+
+tt.hetero.vacc = t.test(ratio_hetero_vacc$ratio, mu=1)
+
+# use bootstrap to compute ratio and 95% CI for homozygous 02 versus homozygous 04
+ratio_homo_vacc = rep_freq %>% left_join(treat_info, by='pubid') %>%
+  filter(Treatment != 'DPBS sucrose') %>%
+  left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  filter(homozygous=='Homozygote')
+
+ratio_homo_mean_vacc = ratio_homo_vacc %>%
+  group_by(allele) %>%
+  summarize(freq = mean(freq))
+ratio.est.vacc = ratio_homo_mean_vacc$freq[1]/ratio_homo_mean_vacc$freq[2]
+
+set.seed(1)
+BOOT = 10000
+if( file.exists('../data/ratio_tab_boot_vacc.RData') ) {
+  load('../data/ratio_tab_boot_vacc.RData')
+} else {
+  ratio.boot.vacc = replicate(BOOT, {
+    ratio_homo_boot_vacc = ratio_homo_vacc[sample(1:nrow(ratio_homo_vacc), replace=TRUE),]
+    rat = ratio_homo_boot_vacc %>%
+      group_by(allele) %>%
+      summarize(freq = mean(freq))
+
+    return(rat$freq[1]/rat$freq[2])
+  })
+  ratio.boot.vacc.ci = quantile(ratio.boot.vacc, c(0.025,0.975))
+  ratio.boot.vacc.pval = mean(ratio.boot.vacc<=1)
+  ratio.boot.vacc.pval = ifelse(ratio.boot.vacc.pval==0, sprintf('<%0.1g', 1/BOOT), ratio.boot.vacc.pval)
+
+  ratio_tab_boot_vacc = data.frame(Group = c('Homozygote','Heterozygote'),
+                   Ratio = c(ratio.est.vacc, tt.hetero.vacc$estimate),
+                   lci = c(ratio.boot.vacc.ci[1], tt.hetero.vacc$conf.int[1]),
+                   uci = c(ratio.boot.vacc.ci[2], tt.hetero.vacc$conf.int[2]),
+                   pval = c(ratio.boot.vacc.pval, sprintf('%0.4f', tt.hetero.vacc$p.value)))
+
+  save(ratio_tab_boot_vacc, file='../data/ratio_tab_boot_vacc.RData')
+}
+
+```
+
+```{r MAKE-ratio-tab-boot}
+
+ratio_hetero = rep_freq %>% left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  filter(heterozygous0204) %>%
+  mutate(allele0 = allele %>% str_replace('\\*', '')) %>%
+  pivot_wider(id_cols=c(pubid), names_prefix='freq', names_from = allele0, values_from = freq) %>%
+  mutate(ratio = freq02/freq04)
+
+tt.hetero = t.test(ratio_hetero$ratio, mu=1)
+
+# use bootstrap to compute ratio and 95% CI for homozygous 02 versus homozygous 04
+ratio_homo = rep_freq %>% left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  filter(homozygous=='Homozygote')
+
+ratio_homo_mean = ratio_homo %>%
+  group_by(allele) %>%
+  summarize(freq = mean(freq))
+ratio.est = ratio_homo_mean$freq[1]/ratio_homo_mean$freq[2]
+
+set.seed(1)
+BOOT = 10000
+if( file.exists('../data/ratio_tab_boot.RData') ) {
+  load('../data/ratio_tab_boot.RData')
+} else {
+  ratio.boot = replicate(BOOT, {
+    ratio_homo_boot = ratio_homo[sample(1:nrow(ratio_homo), replace=TRUE),]
+    rat = ratio_homo_boot %>%
+      group_by(allele) %>%
+      summarize(freq = mean(freq))
+
+    return(rat$freq[1]/rat$freq[2])
+  })
+  ratio.boot.ci = quantile(ratio.boot, c(0.025,0.975))
+  ratio.boot.pval = mean(ratio.boot<=1)
+  ratio.boot.pval = ifelse(ratio.boot.pval==0, sprintf('<%0.1g', 1/BOOT), ratio.boot.pval)
+
+  ratio_tab_boot = data.frame(Group = c('Homozygote','Heterozygote'),
+                   Ratio = c(ratio.est, tt.hetero$estimate),
+                   lci = c(ratio.boot.ci[1], tt.hetero$conf.int[1]),
+                   uci = c(ratio.boot.ci[2], tt.hetero$conf.int[2]),
+                   pval = c(ratio.boot.pval, sprintf('%0.4f', tt.hetero$p.value)))
+
+  save(ratio_tab_boot, file='../data/ratio_tab_boot.RData')
+}
+
+```
+
+```{r MAKE-ratio-tab-boot-vacc_cdr3}
+
+ratio_hetero_vacc_cdr3 = cdr3_data %>%
+  select(pubid, allele, barcodes_freq, CDR3s_freq) %>%
+  left_join(treat_info %>% select(pubid, Treatment), by=c('pubid')) %>%
+  filter(Treatment != 'DPBS sucrose') %>%
+  left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  filter(heterozygous0204) %>%
+  mutate(allele0 = allele %>% str_replace('\\*', '')) %>%
+  pivot_wider(id_cols=c(pubid), names_prefix='freq_', names_from = allele0, values_from = CDR3s_freq) %>%
+  mutate(ratio = freq_02/freq_04)
+
+tt.hetero.vacc.cdr3 = t.test(ratio_hetero_vacc_cdr3$ratio, mu=1)
+
+ratio_homo_vacc_cdr3 = cdr3_data %>%
+  select(pubid, allele, CDR3s_freq) %>%
+  left_join(treat_info %>% select(pubid, Treatment), by=c('pubid')) %>%
+  filter(Treatment != 'DPBS sucrose') %>%
+  left_join(geno_data, by='pubid') %>%
+  mutate(homozygous = factor(homozygous, levels=c(TRUE,FALSE), labels=c('Homozygote','Heterozygote'))) %>%
+  filter(homozygous=='Homozygote')
+
+ratio_homo_mean_vacc_cdr3 = ratio_homo_vacc_cdr3 %>%
+  group_by(allele) %>%
+  summarize(freq = mean(CDR3s_freq))
+ratio.est.vacc.cdr3 = ratio_homo_mean_vacc_cdr3$freq[1]/ratio_homo_mean_vacc_cdr3$freq[2]
+
+set.seed(1)
+BOOT = 10000
+if( file.exists('../data/ratio_tab_boot_vacc_cdr3.RData') ) {
+  load('../data/ratio_tab_boot_vacc_cdr3.RData')
+} else {
+  ratio.boot.vacc.cdr3 = replicate(BOOT, {
+    ratio_homo_boot_vacc_cdr3 = ratio_homo_vacc_cdr3[sample(1:nrow(ratio_homo_vacc_cdr3), replace=TRUE),]
+    rat = ratio_homo_boot_vacc_cdr3 %>%
+      group_by(allele) %>%
+      summarize(freq = mean(CDR3s_freq))
+
+    return(rat$freq[1]/rat$freq[2])
+  })
+  ratio.boot.vacc.cdr3.ci = quantile(ratio.boot.vacc.cdr3, c(0.025,0.975))
+  ratio.boot.vacc.cdr3.pval = mean(ratio.boot.vacc.cdr3<=1)
+  ratio.boot.vacc.cdr3.pval = ifelse(ratio.boot.vacc.cdr3.pval==0, sprintf('<%0.1g', 1/BOOT), ratio.boot.vacc.cdr3.pval)
+
+  ratio_tab_boot_vacc_cdr3 = data.frame(Group = c('Homozygote','Heterozygote'),
+                   Ratio = c(ratio.est.vacc.cdr3, tt.hetero.vacc.cdr3$estimate),
+                   lci = c(ratio.boot.vacc.ci[1], tt.hetero.vacc.cdr3$conf.int[1]),
+                   uci = c(ratio.boot.vacc.cdr3.ci[2], tt.hetero.vacc.cdr3$conf.int[2]),
+                   pval = c(ratio.boot.vacc.cdr3.pval, sprintf('%0.4f', tt.hetero.vacc.cdr3$p.value)))
+
+  save(ratio_tab_boot_vacc_cdr3, file='../data/ratio_tab_boot_vacc_cdr3.RData')
+}
+
+```
+
+
+```{r MAKE-ratio-tab-vacc, results="asis", warning=kable_warnings}
+
+ratio_tab_vacc1 = ratio_tab_boot_vacc
+ratio_tab_vacc1$Frequency = 'mRNA'
+ratio_tab_vacc2 = ratio_tab_boot_vacc_cdr3
+ratio_tab_vacc2$Frequency = 'Unique HCDR3'
+ratio_tab_vacc = rbind(ratio_tab_vacc1, ratio_tab_vacc2)
+
+ratio_tab_vacc$ci = sprintf('%0.1f to %0.1f', ratio_tab_vacc$lci, ratio_tab_vacc$uci)
+ratio_tab_vacc$Ratio = sprintf('%0.1f', ratio_tab_vacc$Ratio)
+ratio_tab_vacc = as_tibble(ratio_tab_vacc[,c('Frequency', 'Group', 'Ratio', 'ci', 'pval')])
+
+```
+
+<!-- modeling utilities -->
+```{r model-estimate-utilities}
+
+genotype_est_fun = function(fit_in) {
+
+  combs = list('glm' = c('*02/*02' = '2 * exposure_02',
+                         '*02/*04' = 'exposure_02 + exposure_04',
+                         '*02/*05 or *02/*06' = 'exposure_02',
+                         '*04/*04' = '2 * exposure_04',
+                         '*04/*05 or *04/*06' = 'exposure_04'),
+               'lm' =  c('*02/*02' = '2 * n02',
+                         '*02/*04' = 'n02 + n04',
+                         '*02/*05 or *02/*06' = 'n02',
+                         '*04/*04' = '2 * n04',
+                         '*04/*05 or *04/*06' = 'n04'))
+
+  allele_est = lincom(fit_in, combs[[is(fit_in)[1]]])
+
+
+  est = allele_est %>%
+    as_tibble() %>%
+    unnest(cols=c(Estimate, `2.5 %`, `97.5 %`)) %>%
+    mutate(Parameter=rownames(allele_est)) %>%
+    select(Parameter, Estimate, `2.5 %`, `97.5 %`)
+
+  return(est)
+}
+
+ratio_est_fun = function(fit_in) {
+  se02_04 <- deltamethod(~ x1 / x2, mean = coef(fit_in), vcov(fit_in))
+  ci02_04 <- coef(fit_in)[1] / coef(fit_in)[2] +
+    c(-1,0,1) * qnorm(.975) * se02_04
+
+  ci02_04[1] = max(ci02_04[1], 0) # truncate lower bound at zero
+
+  ratio_est = matrix(
+    c(ci02_04),
+    nrow = 1, byrow = TRUE) %>%
+    as.data.frame()
+  colnames(ratio_est) <- c('2.5 %', 'Estimate', '97.5 %')
+  ratio_est$Parameter <- c('Ratio of *02 to *04')
+  ratio_est = as_tibble(ratio_est[,c('Parameter', 'Estimate', '2.5 %', '97.5 %')])
+
+  return(ratio_est)
+}
+```
+
+```{r qaicc-tab, results='asis', warning=FALSE}
+qaicc_tab = c()
+fit = list()
+models = list(
+  'null'   = reformulate(termlabels = c(-1, 'IgG_Bcells'), response='Imputed_VRC01'),
+  'trt'    = reformulate(termlabels = c(-1, 'IgG_Bcells', 'Treat_Bcell'), response='Imputed_VRC01'),
+  'allele' = reformulate(termlabels = c(-1, 'exposure_02', 'exposure_04'), response='Imputed_VRC01'),
+  #'freq' = reformulate(termlabels = c(-1, 'exposure_freq02', 'exposure_freq04'), response='Imputed_VRC01'),
+  'full'   = reformulate(termlabels = c(-1, 'exposure_02', 'exposure_04', 'Treat_Bcell'), response='Imputed_VRC01'))
+
+models.p = list(
+  'null'   = reformulate(termlabels = c('1'), response='percent_vrc01'),
+  'trt'    = reformulate(termlabels = c('1', 'Treat_num'), response='percent_vrc01'),
+  'allele' = reformulate(termlabels = c('-1', 'n02', 'n04'), response='percent_vrc01'),
+  #'freq' = reformulate(termlabels = c('-1', 'freq02', 'freq04'), response='percent_vrc01'),
+  'full'   = reformulate(termlabels = c('-1', 'n02', 'n04', 'Treat_num'), response='percent_vrc01'))
+
+for( Visit_in in c('V05', 'V06', 'V07', 'V07A', 'V08', 'V09', 'V10') ) {
+  data_visit = model_data %>% filter(Visit==Visit_in)
+  data_visit_0204 = data_visit %>% filter(genotype != '*05/*06')
+
+  fit[[Visit_in]] = list()
+  for( name in names(models) ) {
+    model = models[[name]]
+    model.p = models.p[[name]]
+    fit[[Visit_in]][[name]] = list()
+    fit[[Visit_in]][[name]][['lm']] = lm(model.p, data=data_visit)
+
+    start_vals = pmax(coef(fit[[Visit_in]][[name]][['lm']])/100, 10^-9)
+
+    fit[[Visit_in]][[name]][['quasipoisson']] = glm(model,
+                  family = quasipoisson(link = "identity"),
+                  data = data_visit_0204,
+                  start = start_vals,
+                  maxit = 10000)
+    fit[[Visit_in]][[name]][['poisson']] = glm(model,
+                  family = poisson(link = "identity"),
+                  data = data_visit_0204,
+                  start = start_vals,
+                  maxit = 10000)
+  }
+
+  for( name in names(models) ) {
+
+    full_dis = summary(fit[[Visit_in]][['full']][['quasipoisson']])$dispersion
+    LL = fit[[Visit_in]][[name]][['poisson']] %>% logLik()
+    K = attributes(LL)$df + 1
+    n = attributes(LL)$nobs
+    # note, this should be the same for all 4 models at a given week
+    Quasi.LL = as.numeric(LL) / full_dis
+
+    QAICc = -2 * Quasi.LL + (2 * n * K) / (n - K - 1)
+
+    tmp = data.frame(Visit=Visit_in,
+                     Model=name,
+                     n=n,
+                     K=K,
+                     LL=as.numeric(LL),
+                     Dispersion = summary(fit[[Visit_in]][[name]][['quasipoisson']])$dispersion,
+                     QAICc=QAICc)
+    qaicc_tab = rbind(qaicc_tab, tmp)
+  }
+}
+
+qaicc_tab = qaicc_tab %>%
+  mutate(
+    Model = factor(Model,
+                   levels=names(ModelLabels),
+                   labels=ModelLabels),
+    Visit = factor(Visit,
+                   levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                   labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  group_by(Visit) %>%
+  arrange(QAICc, .by_group = TRUE)
+
+qaicc_best_model_tab = qaicc_tab %>%
+  group_by(Visit) %>%
+  summarise(Model=Model[which.min(QAICc)]) %>%
+  ungroup()
+
+```
+
+
+\blandscape
+```{r quasipoisson-genotype-plot-comb4, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.scap="Allele model estimates by genotype", fig.cap= "Allele model estimates by genotype.", warning=F}
+
+est_info = lapply(names(fit), function(visit) {
+  est = genotype_est_fun(fit[[visit]]$allele$quasipoisson)
+  est$Visit = visit
+  return(est)
+})
+est_info = do.call(rbind, est_info) %>%
+  as_tibble()
+
+est_info = est_info %>%
+  mutate(Estimate = 100 * Estimate,
+         '2.5 %' = 100 * `2.5 %`,
+         '97.5 %' = 100 * `97.5 %`,
+         Visit = factor(Visit, levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                          labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  rename(genotype_grouped=Parameter) %>%
+  right_join(qaicc_best_model_tab %>% filter(Model=='Allele') %>% select(-Model), by='Visit')
+
+point_data = bcell_adata %>%
+  mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
+         genotype_grouped = factor(genotype) %>%
+            fct_recode(
+              `*02/*02` = '*02/*02',
+              `*02/*04` = '*02/*04',
+              `*04/*04` = '*04/*04',
+              `*04/*05 or *04/*06` = '*04/*05',
+              `*04/*05 or *04/*06` = '*04/*06',
+              `*02/*05 or *02/*06` = '*02/*05',
+              `*02/*05 or *02/*06` = '*02/*06',
+              `*05/*06` = '*05/*06') %>%
+            fct_relevel(
+              '*02/*02',
+              '*02/*04',
+              '*02/*05 or *02/*06',
+              '*04/*04',
+              '*04/*05 or *04/*06',
+              '*05/*06'
+            ),
+    Visit = factor(Visit, levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                          labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  filter(Visit != 'V02',
+       !is.na(percent_vrc01),
+       Treatment != 'Placebo',
+       genotype != '*05/*06'
+       ) %>%
+  mutate(Treatment = fct_drop(Treatment)) %>%
+  right_join(qaicc_best_model_tab %>% filter(Model=='Allele') %>% select(-Model), by='Visit')
+
+
+# add dummy data so position_jitterdodge works
+dummy_extra = expand_grid(pubid=NA,
+                          genotype_grouped=levels(factor(point_data$genotype_grouped)),
+                          Treatment=levels(factor(point_data$Treatment)),
+                          percent_vrc01=10000, # use absurd amount so we would notice if it gets plotted
+                          Visit=levels(factor(point_data$Visit)))
+point_data_with_dummy = point_data %>%
+  select(pubid, percent_vrc01, genotype_grouped, Treatment, Visit) %>%
+  rbind(dummy_extra)
+
+point_data_mbc = point_data_with_dummy %>% filter(grepl('MBC', Visit))
+est_info_mbc = est_info %>% filter(grepl('MBC', Visit))
+p1 = ggplot(point_data_mbc, aes(x = genotype_grouped, y = pmax(percent_vrc01, 0.001))) +
+  geom_boxplot(data=point_data %>% filter(grepl('MBC', Visit)), outlier.shape = NA, coef=0, color='gray') +
+  geom_point(
+    aes(color = Treatment, shape=Treatment),
+    position = position_jitterdodge( jitter.width=0.25, jitter.height=0, dodge.width = 1, seed=54321),
+    size=1.2
+  ) +
+  geom_errorbar(data = est_info_mbc,
+                aes(y = Estimate, ymin =  pmax(`2.5 %`, 0.0001), ymax = `97.5 %`), width = .2) +
+  geom_point(data = est_info_mbc,
+                aes(y = Estimate), size = 1.6, shape = 23, fill='black') +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_y_log10(
+    breaks = c(.001,.01, .1, 1, 10),
+    minor_breaks = c(seq(0.002,0.01, by=0.001), seq(0.01,0.1,by=0.01), seq(0.1,1,by=0.1), seq(1,10,by=1)),
+    labels = c(expression("" <= "0.001%"), '0.01%', '0.1%', '1%', '10%')
+  ) +
+  #annotation_ticks(sides='l', outside = TRUE, size=0.3, tick.length = unit(3.2,'pt'), minor.length = unit(2.7, 'pt')) +
+  coord_cartesian(ylim=c(0.001,1)) +
+  theme(
+    axis.text.x = element_text(size = 7, angle = 35, vjust = 1, hjust = 1),
+    axis.ticks.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.position = "bottom"
+  ) +
+  facet_wrap(vars(Visit), nrow = 1) +
+  ylab('Percent of IgG memory B cells\ndetected as VRC01-class')
+
+point_data_wk3 = point_data_with_dummy %>% filter(grepl('Wk3', Visit))
+est_info_wk3 = est_info %>% filter(grepl('Wk3', Visit))
+p2 = ggplot(point_data_wk3, aes(x = genotype_grouped, y = pmax(percent_vrc01, 0.01))) +
+  geom_boxplot(data=point_data %>% filter(grepl('Wk3', Visit)), outlier.shape = NA, coef=0, color='gray') +
+  geom_point(
+    aes(color = Treatment, shape=Treatment),
+    position = position_jitterdodge( jitter.width=0.25, jitter.height=0, dodge.width = 1, seed=54321),
+    size=1.2
+  ) +
+  geom_errorbar(data = est_info_wk3,
+                aes(y = Estimate, ymin =  pmax(`2.5 %`, 0.001), ymax = `97.5 %`), width = .2) +
+  geom_point(data = est_info_wk3,
+                aes(y = Estimate), size = 1.6, shape = 23, fill='black') +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_discrete("") +
+  scale_y_log10(
+    breaks = c(.01,.1, 1, 10),
+    minor_breaks = c(seq(0.02,0.09,by=0.01), seq(0.2,0.9,by=0.1), seq(2,9,by=1)),
+    labels = c(expression("" <= "0.01%"), '0.1%', '1%', '10%')
+  ) +
+  #annotation_ticks(sides='l', outside = TRUE, size=0.3, tick.length = unit(3.2,'pt'), minor.length = unit(2.7, 'pt')) +
+  coord_cartesian(ylim=c(0.01,10)) +
+  facet_wrap(vars(Visit), nrow = 1) +
+  theme(
+    axis.text.x = element_text(size = 7, angle = 35, vjust = 1, hjust = 1),
+    axis.ticks.x = element_blank(),
+    legend.position = "none"
+  ) +
+  ylab('Percent of IgG GC B cells\ndetected as VRC01-class')
+
+point_data_wk9 = point_data_with_dummy %>% filter(grepl('Wk9', Visit))
+est_info_wk9 = est_info %>% filter(grepl('Wk9', Visit))
+p3 = ggplot(point_data_wk9, aes(x = genotype_grouped, y = pmax(percent_vrc01, 0.01))) +
+  geom_boxplot(data=point_data %>% filter(grepl('Wk9', Visit)), outlier.shape = NA, coef=0, color='gray') +
+  geom_point(
+    aes(color = Treatment, shape=Treatment),
+    position = position_jitterdodge( jitter.width=0.25, jitter.height=0, dodge.width = 1, seed=54321),
+    size=1.2
+  ) +
+  geom_errorbar(data = est_info_wk9,
+                aes(y = Estimate, ymin =  pmax(`2.5 %`, 0.001), ymax = `97.5 %`), width = .2) +
+  geom_point(data = est_info_wk9,
+                aes(y = Estimate), size = 1.6, shape = 23, fill='black') +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_discrete("") +
+  scale_y_log10(
+    breaks = c(.01,.1, 1, 10),
+    minor_breaks = c(seq(0.02,0.09,by=0.01), seq(0.2,0.9,by=0.1), seq(2,9,by=1)),
+    labels = c(expression("" <= "0.01%"), '0.1%', '1%', '10%')
+  ) +
+  #annotation_ticks(sides='l', outside = TRUE, size=0.3, tick.length = unit(3.2,'pt'), minor.length = unit(2.7, 'pt')) +
+  coord_cartesian(ylim=c(0.01,10)) +
+  facet_wrap(vars(Visit), nrow = 1) +
+  theme(
+    axis.text.x = element_text(size = 7, angle = 35, vjust = 1, hjust = 1),
+    axis.ticks.x = element_blank(),
+    legend.position = "none"
+  ) +
+  ylab('Percent of IgD- plasmablasts\ndetected as VRC01-class')
+
+legend = plot_grid(get_legend(p1)) + theme(plot.margin = margin())
+
+p10 = p1 + theme(legend.position = 'none', plot.margin = margin())
+p20 = p2 + theme(plot.margin = margin(c(5,0,0,20)))
+p30 = p3 + theme(plot.margin = margin(c(5,0,0,20)))
+
+
+p = plot_grid(p10,
+              plot_grid(NULL,p20, p30, nrow=1, rel_widths = c(1,1.28,1.28)),
+              nrow=2, align='v', axis = 'r') +
+  theme(plot.margin = margin())
+plot_grid(p, legend, ncol=1, rel_heights = c(10,1))
+
+```
+\elandscape
+
+
+
+```{r bcr-usage-tab, results='asis', warning=FALSE}
+
+seq_data_hetero0204 = seq_data %>%
+  filter(vaccine_group=='vaccine', timepoint != 'V02', genotype=='*02/*04', is_vrc01_class)
+
+bcr_usage_amb_tab = seq_data %>%
+  filter(vaccine_group=='vaccine', timepoint != 'V02', genotype=='*02/*04', is_vrc01_class, ighv == 'Ambiguous') %>%
+  select(pubid, dose_group, timepoint, genotype, v_call_heavy) %>%
+  mutate(
+    v_call_heavy = str_replace_all(v_call_heavy,'IGHV1-2', ''),
+    dose = factor(dose_group,
+                 levels=c('Low Dose', 'High Dose'),
+                 labels=c('20µg', '100µg')),
+    ID = str_replace(pubid, 'PubID_', '')
+  ) %>%
+  mutate(
+    n = str_count(v_call_heavy, ',') + 1,
+    n02 = str_count(v_call_heavy, fixed('*02'))/n,
+    n04 = str_count(v_call_heavy, fixed('*04'))/n
+  ) %>%
+  select(dose, ID, timepoint, genotype, n02, n04) %>%
+  arrange(dose, ID, timepoint)
+
+tab = seq_data %>%
+  filter(vaccine_group=='vaccine', timepoint != 'V02', genotype=='*02/*04', is_vrc01_class) %>%
+  mutate(ighv = str_replace(ighv, 'IGHV1-2', ''),
+         dose = factor(dose_group,
+                       levels=c('Low Dose', 'High Dose'),
+                       labels=c('20µg', '100µg')),
+         ID = str_replace(pubid, 'PubID_', '')
+  ) %>%
+  group_by(dose, ID, timepoint) %>%
+  summarise( n02 = sum(ighv=='*02'),
+             n04 = sum(ighv=='*04'),
+             .groups='drop'
+  ) %>%
+  bind_rows( bcr_usage_amb_tab %>% select(dose, ID, timepoint, n02, n04) ) %>%
+  group_by(dose, ID, timepoint) %>%
+  summarise( n02 = sum(n02),
+             n04 = sum(n04),
+             Ratio = n02/n04,
+             .groups = 'drop' ) %>%
+  ungroup() %>%
+  complete(nesting(dose, ID), timepoint) %>%
+  mutate(
+    ID = factor(ID),
+    timepoint = factor(timepoint)
+  ) %>%
+  arrange(timepoint, dose, ID) 
+
+bcr_usage_comb = tab %>%
+  group_by(dose, ID) %>%
+  summarise(
+    timepoint = 'Combined',
+    n02 = sum(n02, na.rm=TRUE),
+    n04 = sum(n04, na.rm=TRUE),
+    Ratio = n02/n04,
+    .groups = 'drop'
+  ) %>%
+  ungroup()
+
+
+tab = bind_rows(tab, bcr_usage_comb) %>%
+  mutate(
+    timepoint = factor(timepoint, levels=c(levels(tab$timepoint), 'Combined'))
+  )
+
+
+meds = tab %>%
+  group_by(timepoint) %>%
+  summarise(
+    dose = NA,
+    ID='Median',
+    Ratio=median(Ratio, na.rm = TRUE),
+    .groups='drop'
+  )
+
+bcr_usage_tab = bind_rows(tab, meds) %>%
+  mutate(
+    ID = factor(ID, levels=c(levels(tab$ID), 'Median')),
+    dose = factor(dose, levels=c(levels(tab$dose), NA)),
+    timepoint = factor(timepoint,
+                   levels=c('V06','V07','V08','V10','V05','V09','V07A', 'Combined'),
+                   labels=c(VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')], 'Combined'))
+  ) %>%
+  rename( `*02`=n02,
+          `*04`=n04
+  ) %>%
+  arrange(timepoint, dose, ID)
+```
+
+
+
+
+```{r comb-ratio-plot2, fig.width=7, fig.height=8.5, fig.scap='Ratio estimates', fig.cap='Ratio estimates', warning=FALSE}
+
+rtab = lapply(names(fit), function(visit) {
+  est = ratio_est_fun(fit[[visit]]$allele$quasipoisson)
+  est$Visit = visit
+  return(est)
+})
+rtab = do.call(rbind, rtab)
+
+rtab = rtab %>%
+  mutate(
+    Ratio = Estimate,
+    lci = `2.5 %`,
+    uci = `97.5 %`,
+    Visit = factor(Visit,
+                   levels=names(VisitLabels),
+                   labels=VisitLabels)
+  ) %>%
+  select(Visit, Ratio, lci, uci) %>%
+  right_join(qaicc_best_model_tab %>% filter(Model=='Allele') %>% select(-Model), by='Visit') %>%
+  arrange(desc(Visit))
+
+comb_rtab = rbind(
+  rtab %>% mutate(set='Model') %>% rename(Label=Visit),
+  ratio_tab_boot_vacc %>% mutate(set='mRNA') %>% rename(Label=Group) %>% select(set, Label, Ratio, lci, uci)
+    %>% map_df(rev),
+  ratio_tab_boot_vacc_cdr3 %>% mutate(set='HCDR3') %>% rename(Label=Group) %>% select(set, Label, Ratio, lci, uci),
+  bcr_usage_tab %>% filter(timepoint=='Combined', ID != 'Median') %>%
+    summarize(set='BCR', Label='Heterozygote', mu=mean(Ratio), lci=t.test(Ratio)$conf.int[1], uci=t.test(Ratio)$conf.int[2]) %>% rename(Ratio=mu)
+)
+comb_rtab$set = factor(comb_rtab$set, levels=c('Model', 'mRNA', 'HCDR3', 'BCR'))
+comb_rtab$row = factor(1:nrow(comb_rtab))
+
+xmin=0
+xmax=max(c(bcr_usage_comb$Ratio, ratio_hetero$ratio))
+
+data_mrna_vacc = ratio_hetero_vacc %>%
+  left_join(treat_info, by='pubid') %>%
+  filter(Treatment != 'DPBS sucrose') %>%
+  mutate(trt = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels)) %>%
+  mutate(trt = fct_drop(trt))
+
+data_hcdr3_vacc = ratio_hetero_vacc_cdr3 %>%
+  left_join(treat_info, by=c('pubid')) %>%
+  filter(Treatment != 'DPBS sucrose') %>%
+  mutate(trt = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels)) %>%
+  mutate(trt = fct_drop(trt))
+
+data_bcr =  bcr_usage_comb %>%
+  left_join(treat_info %>% mutate(ID = factor(ID)), by='ID') %>%
+  mutate(trt = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels)) %>%
+  mutate(trt = fct_drop(trt))
+
+
+set.seed(1)
+p1 = ggplot(subset(comb_rtab, set=='Model'), aes(x=Ratio, y=row)) +
+  geom_vline(xintercept = 1, color = "black", linetype = "dashed") +
+  geom_point(size=2) +
+  geom_errorbarh(aes(xmin=lci, xmax=uci), height=0.1) +
+  scale_y_discrete(labels=function(row) comb_rtab$Label[as.numeric(row)]) +
+  ylab('') +
+  xlab('Parameter estimate ratio (*02 to *04)') +
+  theme(axis.ticks.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank()) +
+  scale_x_continuous(breaks=c(0,1,5,10,15), minor_breaks = seq(0,20,by=1), limits = c(xmin,xmax)) +
+  annotation_ticks(outside = TRUE, size=0.4, tick.length = unit(3.2,'pt'), minor.length = unit(3.2, 'pt')) +
+  coord_cartesian(clip = 'off') +
+  facet_grid(set~., )
+
+set.seed(1)
+p2 = ggplot(subset(comb_rtab, set=='mRNA'), aes(x=Ratio, y=row)) +
+  geom_point(data=data_mrna_vacc,
+             aes(y=rep(subset(comb_rtab, set=='mRNA' & Label=='Heterozygote')$row, nrow(data_mrna_vacc)),
+                 x=ratio,
+                  shape=trt,
+                  color=trt),
+            position = position_jitterdodge( jitter.width=0.5, jitter.height=0, dodge.width = 1, seed=12),
+            size=2
+  ) +
+  scale_color_manual(name='', labels=levels(data_mrna_vacc$trt), values = trt_colors[levels(data_mrna_vacc$trt)]) +
+  scale_shape_manual(name='', labels=levels(data_mrna_vacc$trt), values = c(17,19)) +
+  geom_vline(xintercept = 1, color = "black", linetype = "dashed") +
+  geom_point(size=2) +
+  geom_errorbarh(aes(xmin=lci, xmax=uci), height=0.1) +
+  scale_y_discrete(labels=function(row) comb_rtab$Label[as.numeric(row)]) +
+  ylab('') +
+  xlab('mRNA expression ratio (*02 to *04)') +
+  theme(axis.ticks.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank()) +
+  scale_x_continuous(breaks=c(0,1,5,10,15), minor_breaks = seq(0,20,by=1), limits = c(xmin,xmax)) +
+  annotation_ticks(outside = TRUE, size=0.4, tick.length = unit(3.2,'pt'), minor.length = unit(3.2, 'pt')) +
+  coord_cartesian(clip = 'off') +
+  facet_grid(set~.)
+
+set.seed(1)
+p3 = ggplot(subset(comb_rtab, set=='HCDR3'), aes(x=Ratio, y=row)) +
+  geom_point(data=data_hcdr3_vacc,
+             aes(y=rep(subset(comb_rtab, set=='HCDR3' & Label=='Heterozygote')$row, nrow(data_hcdr3_vacc)),
+                 x=ratio,
+                  shape=trt,
+                  color=trt),
+            position = position_jitterdodge( jitter.width=0.5, jitter.height=0, dodge.width = 1, seed=12),
+            size=2
+  ) +
+  scale_color_manual(name='', labels=levels(data_hcdr3_vacc$trt), values = trt_colors[levels(data_hcdr3_vacc$trt)]) +
+  scale_shape_manual(name='', labels=levels(data_hcdr3_vacc$trt), values = c(17,19)) +
+  geom_vline(xintercept = 1, color = "black", linetype = "dashed") +
+  geom_point(size=2) +
+  geom_errorbarh(aes(xmin=lci, xmax=uci), height=0.1) +
+  scale_y_discrete(labels=function(row) comb_rtab$Label[as.numeric(row)]) +
+  ylab('') +
+  xlab('Unique HCDR3 frequency ratio (*02 to *04)') +
+  theme(axis.ticks.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank()) +
+  scale_x_continuous(breaks=c(0,1,5,10,15), minor_breaks = seq(0,20,by=1), limits = c(xmin,xmax)) +
+  annotation_ticks(outside = TRUE, size=0.4, tick.length = unit(3.2,'pt'), minor.length = unit(3.2, 'pt')) +
+  coord_cartesian(clip = 'off') +
+  facet_grid(set~.)
+
+p4 = ggplot(subset(comb_rtab, set=='BCR'), aes(x=Ratio, y=row)) +
+    geom_point(data=data_bcr,
+             aes(y=rep(subset(comb_rtab, set=='BCR' & Label=='Heterozygote')$row, nrow(data_bcr)),
+                  x=Ratio,
+                  shape=trt,
+                  color=trt),
+            position = position_jitterdodge( jitter.width=0.5, jitter.height=0, dodge.width = 1, seed=12),
+            size=2
+  ) +
+  scale_color_manual(name='', labels=levels(data_bcr$trt), values = trt_colors[levels(data_bcr$trt)]) +
+  scale_shape_manual(name='', labels=levels(data_bcr$trt), values = c(17,19)) +
+  geom_vline(xintercept = 1, color = "black", linetype = "dashed") +
+  geom_point(size=2) +
+  geom_errorbarh(aes(xmin=lci, xmax=uci), height=0.1) +
+  scale_y_discrete(labels=function(row) comb_rtab$Label[as.numeric(row)]) +
+  ylab('') +
+  xlab('BCR assignment ratio (*02 to *04)') +
+  theme(axis.ticks.x=element_blank(),
+        panel.grid.minor.x = element_blank(),
+        panel.grid.major.y = element_blank(),
+        legend.position='non') +
+  scale_x_continuous(breaks=c(0,1,5,10,15), minor_breaks = seq(0,20,by=1), limits = c(xmin,xmax)) +
+  annotation_ticks(outside = TRUE, size=0.4, tick.length = unit(3.2,'pt'), minor.length = unit(3.2, 'pt')) +
+  coord_cartesian(clip = 'off') +
+  facet_grid(set~.)
+
+legend = plot_grid(get_legend(p2)) + theme(plot.margin = margin())
+p10 = p1 + theme(plot.margin = margin(c(0,0,10,0)))
+p20 = p2 + theme(legend.position='none',
+                 plot.margin = margin(c(0,0,10,0)))
+p30 = p3 + theme(legend.position='none',
+                 plot.margin = margin(c(0,0,10,0)))
+p40 = p4 + theme(plot.margin = margin(c(0,0,10,0)))
+
+plot_grid(p10, p20, p30, p40, legend, ncol=1, align='v', axis='lr', labels=LETTERS[1:4], vjust = 0, rel_heights = c(5,2,2,1.7, 0.5)) + theme(plot.margin = margin(c(10,0,0,0)))
+```
+
+
+\blandscape
+```{r naive-rep-vrc01-resp-correlations-v2-with-week11, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.cap='Naive vs. VRC01 response correlations', warning=FALSE}
+
+plot_data = bcell_adata %>%
+  mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
+         genotype_grouped = factor(genotype) %>%
+            fct_recode(
+              `*02/*02` = '*02/*02',
+              `*02/*04` = '*02/*04',
+              `*04/*04` = '*04/*04',
+              `*04/*05 or *04/*06` = '*04/*05',
+              `*04/*05 or *04/*06` = '*04/*06',
+              `*02/*05 or *02/*06` = '*02/*05',
+              `*02/*05 or *02/*06` = '*02/*06',
+              `*05/*06` = '*05/*06') %>%
+            fct_relevel(
+              '*02/*02',
+              '*02/*04',
+              '*02/*05 or *02/*06',
+              '*04/*04',
+              '*04/*05 or *04/*06',
+              '*05/*06'
+            ),
+    Visit = factor(Visit, levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                          labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  filter(Visit != 'V02',
+       !is.na(percent_vrc01),
+       Treatment != 'Placebo',
+       genotype != '*05/*06'
+       ) %>%
+  mutate(Treatment = fct_drop(Treatment)) %>%
+  select(pubid, Treatment, Visit, genotype_grouped, percent_vrc01) %>%
+  left_join(naive0204, by='pubid')
+
+df_r = plot_data %>%
+  group_by(Visit) %>%
+  summarize(rho = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$est,
+            pval = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$p.value,
+            .groups='drop'
+  ) %>%
+  mutate( lab = sprintf('r=%0.2f, P=%0.4f', rho, pval) )
+
+plot_data_mbc = plot_data %>% filter(grepl('MBC', Visit))
+df_r_mbc = df_r %>% filter(grepl('MBC', Visit))
+
+p1 = ggplot(plot_data_mbc, aes(x=CDR3s_freq, y=pmax(0.001,percent_vrc01))) +
+  geom_point(aes(color = Treatment, shape=Treatment)) +
+  geom_text(data=df_r_mbc, aes(label=lab, x=0.0182, y=1, hjust=0.5, vjust=0), size=3) +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_log10(
+    breaks = c(.003,.01,0.03, .1),
+    labels = c('0.3%', '1%', '3%', '10%')
+  ) +
+  expand_limits(x=c(0.003,0.12)) +
+  scale_y_log10(
+    breaks = c(.001,.01, .1, 1, 10),
+    minor_breaks = c(seq(0.002,0.01, by=0.001), seq(0.01,0.1,by=0.01), seq(0.1,1,by=0.1), seq(1,10,by=1)),
+    labels = c(expression("" <= "0.001%"), '0.01%', '0.1%', '1%', '10%')
+  ) +
+  expand_limits(x=c(0.003, 0.011), y=1.2) +
+  facet_wrap(~Visit, nrow=1) +
+  xlab('') +
+  ylab('Percent of IgG memory B cells\ndetected as VRC01-class')
+
+plot_data_gc = plot_data %>% filter(grepl('GC', Visit))
+df_r_gc = df_r %>% filter(grepl('GC', Visit))
+
+p2 = ggplot(plot_data_gc, aes(x=CDR3s_freq, y=pmax(0.01,percent_vrc01))) +
+  geom_point(aes(color = Treatment, shape=Treatment)) +
+  geom_text(data=df_r_gc, aes(label=lab, x=0.0182, y=10, hjust=0.5, vjust=0), size=3) +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_log10(
+    breaks = c(.003,.01,0.03, .1),
+    labels = c('0.3%', '1%', '3%', '10%')
+  ) +
+  scale_y_log10(
+    breaks = c(.01, .1, 1, 10),
+    minor_breaks = c(seq(0.01,0.1,by=0.01), seq(0.1,1,by=0.1), seq(1,10,by=1)),
+    labels = c(expression("" <= "0.01%"), '0.1%', '1%', '10%')
+  ) +
+  expand_limits(x=c(0.003,0.11), y=12) +
+  facet_wrap(~Visit, nrow=1) +
+  xlab('') +
+  ylab('Percent of IgG GC B cells\ndetected as VRC01-class')
+
+plot_data_wk9 = plot_data %>% filter(grepl('Wk9', Visit))
+df_r_wk9 = df_r %>% filter(grepl('Wk9', Visit))
+
+p3 = ggplot(plot_data_wk9, aes(x=CDR3s_freq, y=pmax(0.01,percent_vrc01))) +
+  geom_point(aes(color = Treatment, shape=Treatment)) +
+  geom_text(data=df_r_wk9, aes(label=lab, x=0.0182, y=10, hjust=0.5, vjust=0), size=3) +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_log10(
+    breaks = c(.003,.01,0.03, .1),
+    labels = c('0.3%', '1%', '3%', '10%'),
+  ) +
+  scale_y_log10(
+    breaks = c(.01, .1, 1, 10),
+    minor_breaks = c(seq(0.01,0.1,by=0.01), seq(0.1,1,by=0.1), seq(1,10,by=1)),
+    labels = c(expression("" <= "0.01%"), '0.1%', '1%', '10%')
+  ) +
+  expand_limits(x=c(0.003,0.11), y=12) +
+  facet_wrap(~Visit, nrow=1) +
+  xlab('') +
+  ylab('Percent of IgD- plasmablasts\ndetected as VRC01-class')
+
+legend = plot_grid(get_legend(p1))
+
+p10 = p1 + theme(legend.position = 'none', plot.margin = margin())
+p20 = p2 + theme(legend.position = 'none', plot.margin = margin())
+p30 = p3 + theme(legend.position = 'none', plot.margin = margin())
+
+p = plot_grid(p10,
+              plot_grid(p20, NULL, p30, nrow=1, rel_widths = c(2.55, 0.55, 1.5)),
+              nrow=2, align='v', axis = 'r') +
+  theme(plot.margin = margin())
+x.grob = grid::textGrob('Unique HCDR3 frequency (IGHV1-2*02 or *04)')
+
+p = gridExtra::arrangeGrob(p, bottom = x.grob, padding = unit(1,'lines'))
+
+plot_grid(p, legend, ncol=1, rel_heights = c(10,1))
+
+```
+\elandscape
+
+\blandscape
+```{r naive-rep-vrc01-resp-correlations-v3-with-week11, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.cap='Naive vs. VRC01 response correlations', warning=FALSE}
+
+plot_data = bcell_adata %>%
+  mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
+         genotype_grouped = factor(genotype) %>%
+            fct_recode(
+              `*02/*02` = '*02/*02',
+              `*02/*04` = '*02/*04',
+              `*04/*04` = '*04/*04',
+              `*04/*05 or *04/*06` = '*04/*05',
+              `*04/*05 or *04/*06` = '*04/*06',
+              `*02/*05 or *02/*06` = '*02/*05',
+              `*02/*05 or *02/*06` = '*02/*06',
+              `*05/*06` = '*05/*06') %>%
+            fct_relevel(
+              '*02/*02',
+              '*02/*04',
+              '*02/*05 or *02/*06',
+              '*04/*04',
+              '*04/*05 or *04/*06',
+              '*05/*06'
+            ),
+    Visit = factor(Visit, levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                          labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  filter(Visit != 'V02',
+       !is.na(percent_vrc01),
+       Treatment != 'Placebo',
+       genotype != '*05/*06'
+       ) %>%
+  mutate(Treatment = fct_drop(Treatment)) %>%
+  select(pubid, Treatment, Visit, genotype_grouped, percent_vrc01) %>%
+  left_join(naive0204, by='pubid')
+
+df_r = plot_data %>%
+  group_by(Visit) %>%
+  summarize(rho = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$est,
+            pval = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$p.value,
+            .groups='drop'
+  ) %>%
+  mutate( lab = sprintf('r=%0.2f, P=%0.4f (combined)', rho, pval) )
+
+df_r_low = plot_data %>%
+  filter(Treatment=='20 µg') %>%
+  group_by(Visit) %>%
+  summarize(rho = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$est,
+            pval = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$p.value,
+            .groups='drop'
+  ) %>%
+  mutate( lab = sprintf('r=%0.2f, P=%0.4f (low dose)', rho, pval) )
+
+df_r_high = plot_data %>%
+  filter(Treatment=='100 µg') %>%
+  group_by(Visit) %>%
+  summarize(rho = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$est,
+            pval = cor.test(CDR3s_freq, percent_vrc01, method='spearman')$p.value,
+            .groups='drop'
+  ) %>%
+  mutate( lab = sprintf('r=%0.2f, P=%0.4f (high dose)', rho, pval) )
+
+
+plot_data_mbc = plot_data %>% filter(grepl('MBC', Visit))
+df_r_mbc = df_r %>% filter(grepl('MBC', Visit))
+df_r_mbc_low = df_r_low %>% filter(grepl('MBC', Visit))
+df_r_mbc_high = df_r_high %>% filter(grepl('MBC', Visit))
+
+p1 = ggplot(plot_data_mbc, aes(x=CDR3s_freq, y=pmax(0.001,percent_vrc01))) +
+  geom_point(aes(color = Treatment, shape=Treatment)) +
+  #geom_text(data=df_r_mbc, aes(label=lab, x=0.0182, y=3, hjust=0.5, vjust=0), size=3) +
+  geom_text(data=df_r_mbc_low, aes(label=lab, x=0.0182, y=1.1*1.732, hjust=0.5, vjust=0), size=3) +
+  geom_text(data=df_r_mbc_high, aes(label=lab, x=0.0182, y=1.1, hjust=0.5, vjust=0), size=3) +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_log10(
+    breaks = c(.003,.01,0.03, .1),
+    labels = c('0.3%', '1%', '3%', '10%')
+  ) +
+  expand_limits(x=c(0.003,0.12)) +
+  scale_y_log10(
+    breaks = c(.001,.01, .1, 1, 10),
+    minor_breaks = c(seq(0.002,0.01, by=0.001), seq(0.01,0.1,by=0.01), seq(0.1,1,by=0.1), seq(1,10,by=1)),
+    labels = c(expression("" <= "0.001%"), '0.01%', '0.1%', '1%', '10%')
+  ) +
+  expand_limits(x=c(0.003, 0.011), y=1.2) +
+  facet_wrap(~Visit, nrow=1) +
+  xlab('') +
+  ylab('Percent of IgG memory B cells\ndetected as VRC01-class')
+
+plot_data_gc = plot_data %>% filter(grepl('GC', Visit))
+df_r_gc = df_r %>% filter(grepl('GC', Visit))
+df_r_low_gc = df_r_low %>% filter(grepl('GC', Visit))
+df_r_high_gc = df_r_high %>% filter(grepl('GC', Visit))
+
+p2 = ggplot(plot_data_gc, aes(x=CDR3s_freq, y=pmax(0.01,percent_vrc01))) +
+  geom_point(aes(color = Treatment, shape=Treatment)) +
+  #geom_text(data=df_r_wk3, aes(label=lab, x=0.0182, y=30, hjust=0.5, vjust=0), size=3) +
+  geom_text(data=df_r_low_gc, aes(label=lab, x=0.0182, y=11*1.732, hjust=0.5, vjust=0), size=3) +
+  geom_text(data=df_r_high_gc, aes(label=lab, x=0.0182, y=11, hjust=0.5, vjust=0), size=3) +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_log10(
+    breaks = c(.003,.01,0.03, .1),
+    labels = c('0.3%', '1%', '3%', '10%')
+  ) +
+  scale_y_log10(
+    breaks = c(.01, .1, 1, 10),
+    minor_breaks = c(seq(0.01,0.1,by=0.01), seq(0.1,1,by=0.1), seq(1,10,by=1)),
+    labels = c(expression("" <= "0.01%"), '0.1%', '1%', '10%')
+  ) +
+  expand_limits(x=c(0.003,0.11), y=12) +
+  facet_wrap(~Visit, nrow=1) +
+  xlab('') +
+  ylab('Percent of IgG GC B cells\ndetected as VRC01-class')
+
+plot_data_wk9 = plot_data %>% filter(grepl('Wk9', Visit))
+df_r_wk9 = df_r %>% filter(grepl('Wk9', Visit))
+df_r_low_wk9 = df_r_low %>% filter(grepl('Wk9', Visit))
+df_r_high_wk9 = df_r_high %>% filter(grepl('Wk9', Visit))
+
+p3 = ggplot(plot_data_wk9, aes(x=CDR3s_freq, y=pmax(0.01,percent_vrc01))) +
+  geom_point(aes(color = Treatment, shape=Treatment)) +
+  #geom_text(data=df_r_wk9, aes(label=lab, x=0.0182, y=30, hjust=0.5, vjust=0), size=3) +
+  geom_text(data=df_r_low_wk9, aes(label=lab, x=0.0182, y=11*1.732, hjust=0.5, vjust=0), size=3) +
+  geom_text(data=df_r_high_wk9, aes(label=lab, x=0.0182, y=11, hjust=0.5, vjust=0), size=3) +
+  scale_color_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = trt_colors[levels(point_data$Treatment)]) +
+  scale_shape_manual(name='Dose',
+                     labels=levels(point_data$Treatment),
+                     values = c(17,19)) +
+  scale_x_log10(
+    breaks = c(.003,.01,0.03, .1),
+    labels = c('0.3%', '1%', '3%', '10%'),
+  ) +
+  scale_y_log10(
+    breaks = c(.01, .1, 1, 10),
+    minor_breaks = c(seq(0.01,0.1,by=0.01), seq(0.1,1,by=0.1), seq(1,10,by=1)),
+    labels = c(expression("" <= "0.01%"), '0.1%', '1%', '10%')
+  ) +
+  expand_limits(x=c(0.003,0.11), y=12) +
+  facet_wrap(~Visit, nrow=1) +
+  xlab('') +
+  ylab('Percent of IgD- plasmablasts\ndetected as VRC01-class')
+
+legend = plot_grid(get_legend(p1))
+
+p10 = p1 + theme(legend.position = 'none', plot.margin = margin())
+p20 = p2 + theme(legend.position = 'none', plot.margin = margin())
+p30 = p3 + theme(legend.position = 'none', plot.margin = margin())
+
+p = plot_grid(p10,
+              plot_grid(p20, NULL, p30, nrow=1, rel_widths = c(2.55,0.55,1.5)),
+              nrow=2, align='v', axis = 'r') +
+  theme(plot.margin = margin())
+x.grob = grid::textGrob('Unique HCDR3 frequency (IGHV1-2*02 or *04)')
+p = gridExtra::arrangeGrob(p, bottom = x.grob, padding = unit(1,'lines'))
+
+
+plot_grid(p, legend, ncol=1, rel_heights = c(10,1))
+```
+\elandscape
+
+
+```{r quasipoisson-fit-tab, results='asis'}
+Param = list(
+  null   = list(IgG_Bcells = 'Vacc.'), #'Vaccine pooled'),
+  trt    = list(IgG_Bcells = 'Low', #'Dose = 20µg',
+                Treat_Bcell = 'Delta'), #'Dose delta (100µg - 20µg)'),
+  allele = list(exposure_02 = '*02',
+                exposure_04 = '*04'),
+  full   = list(exposure_02 = '*02',
+                exposure_04 = '*04',
+                Treat_Bcell = 'Delta') #'Dose delta (100µg - 20µg)')
+  )
+
+tab = lapply(names(fit), function(visit) {
+  out = lapply( names(fit[[visit]]), function(model) {
+    m = summary(fit[[visit]][[model]]$quasipoisson)$coefficients
+    m = m %>% as_tibble(m) %>%
+      mutate(Model=model, Parameter = unlist(Param[[model]][rownames(m)]))
+    return(m)
+  })
+  out = do.call(rbind, out) %>%
+    mutate(Visit=visit)
+  return(out)
+})
+tab = do.call(rbind, tab)
+
+quasipoisson_fit_ptab = tab %>%
+  mutate(lci = Estimate - qnorm(0.975) * `Std. Error`,
+         uci = Estimate + qnorm(0.975) * `Std. Error`)
+
+quasipoisson_fit_tab = quasipoisson_fit_ptab %>%
+  mutate(
+         Percent = stat_paste(100*Estimate, 100*lci, 100*uci, digits = 3),
+         Model = factor(Model,
+                        levels = c('allele', 'full','trt','null'),
+                        labels=ModelLabels[c('allele', 'full','trt','null')]),
+         Parameter = fct_relevel(Parameter,c('*02', '*04','Low','Delta','Vacc.')),
+                                 #c('*02', '*04','Dose = 20µg','Dose delta (100µg - 20µg)','Vaccine pooled')),
+         Visit = factor(Visit,
+                        levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                        labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+
+  ) %>%
+  select(-c(`Std. Error`, `t value`, `Pr(>|t|)`, lci, uci, Estimate)) %>%
+  pivot_wider(names_from = Model, values_from = Percent, values_fill = NA, names_sort = TRUE) %>%
+  arrange(Visit, Parameter)
+
+```
+
+
+\blandscape
+```{r qaicc-with-quasipoisson-fit-plot, fig.pos = 'htbp', fig.scap="Quasipoisson fit plot", fig.cap="Quasipoisson fit plot", warning=F}
+
+qaicc_ptab = qaicc_tab %>%
+  mutate(x = as.numeric(Visit)) %>%
+  group_by(Visit) %>%
+  mutate(Rank = rank(QAICc))
+qaicc_ptab_start = subset(qaicc_ptab, Visit==levels(qaicc_ptab$Visit)[1])
+
+fittab = quasipoisson_fit_ptab %>%
+  mutate(
+    Parameter = fct_relevel(Parameter, c("*02", "*04", "Delta", "Low", "Vacc.")),
+                            #c("*02", "*04", "Dose delta (100µg - 20µg)", "Dose = 20µg", "Vaccine pooled")),
+    Model = factor(Model,
+                   levels = c('allele', 'full', 'trt', 'null'),
+                   labels = ModelLabels[c('allele', 'full', 'trt', 'null')]),
+    Visit = factor(Visit,
+                   levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                   labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')]),
+    lab = interaction(Model, Parameter),
+    lab = fct_relevel(lab, rev(levels(lab)))
+)
+
+
+p1 = ggplot(qaicc_ptab, aes(x=x, y=Rank, color=Model)) +
+  geom_line() +
+  geom_point() +
+  scale_color_manual(name='', values = model_colors[levels(qaicc_ptab$Model)]) +
+  theme(
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = 'none',
+    panel.grid = element_blank(),
+    #panel.border = element_blank()
+  ) +
+  xlim(0.8,7.2) +
+  scale_y_reverse(breaks=1:4, labels=subset(qaicc_ptab, Visit=='Wk4 MBC')$Model,limits=c(4.5,0.5) ) +
+  ylab('Model')
+p2 = ggplot(fittab, aes(x=100*Estimate, y=lab, color=Model)) +
+  geom_vline(xintercept = 0, color = "black", linetype = "dashed") +
+  geom_point() +
+  geom_errorbarh(aes(xmin=100*lci, xmax=100*uci), height=0.1) +
+  ylab('Model') +
+  xlab('Parameter estimate and 95% confidence interval (percent scale)') +
+  scale_y_discrete(labels=function(s) sapply(strsplit(s, '.', fixed=TRUE), '[[', 1)) +
+  scale_color_manual(name='', values = model_colors[levels(fittab$Model)]) +
+  theme(axis.text.x = element_text(size = 7, angle = 45, vjust = 1, hjust = 1),
+        axis.ticks.y=element_blank(),
+        legend.position = 'none',
+        panel.spacing.x = unit(7, 'pt'),
+        panel.spacing.y = unit(2, 'pt')
+  ) +
+  facet_grid(Parameter~Visit, scales = 'free', space='free_y')
+
+grob = ggplotGrob(p2+theme(panel.spacing.x = unit(2, 'pt')))
+labs = plot_grid(gtable::gtable_filter(grob, 'strip-t')) + theme(plot.margin = margin())
+p10 = p1 + theme(plot.margin = margin())
+p20 = p2 + theme(plot.margin = margin())
+plot_grid(labs, p10, NULL, p20, ncol=1, labels=c('A','','','B'),
+          align='v', axis='rl', rel_heights=c(0.3,1,0.15,4), vjust=c(1.2,1.2), hjust = 1.5) +
+  theme(plot.margin = margin(c(0,0,0,20)))
+
+
+```
+\elandscape
+
+
+```{r MAKE-mag-tab-vrc01, results="asis", warning=kable_warnings}
+
+mag_tab_vrc01 = magnitude_results %>%
+  select(Treatment, Visit, Comparison,
+         `Sample Sizes` = SampleSizes, `Median (Range)`,
+         `Unadjusted` = MagnitudeTest, `FDR Adjusted` = MagnitudeTest_adj) %>%
+  arrange(Treatment, Visit) %>%
+  mutate(Comparison = Comparison %>% str_replace_all('_', '\\\\_'))
+
+```
+
+```{r MAKE-quasipoisson-genotype-tab, results='asis', warning=FALSE}
+tab = lapply(names(fit), function(visit) {
+  est = genotype_est_fun(fit[[visit]]$allele$quasipoisson)
+  est$Visit = visit
+
+  return(est)
+})
+tab = do.call(rbind, tab)
+
+quasipoisson_genotype_tab = tab %>%
+  mutate(
+    Percent = stat_paste(Estimate*100, `2.5 %`*100, `97.5 %`*100, digits = 3),
+    Visit = factor(Visit,
+                   levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                   labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')]),
+  ) %>%
+  select(Visit, 'Genotype'=Parameter, Percent) %>%
+  right_join(qaicc_best_model_tab %>% filter(Model=='Allele') %>% select(-Model), by='Visit') %>%
+  arrange(Visit)
+
+```
+
+```{r MAKE-quasipoisson-ratio-tab, results='asis', warning=FALSE}
+tab = lapply(names(fit), function(visit) {
+  est = ratio_est_fun(fit[[visit]]$allele$quasipoisson)
+  est$Visit = visit
+  return(est)
+})
+tab = do.call(rbind, tab)
+
+quasipoisson_ratio_tab = tab %>%
+  mutate(
+    Ratio = stat_paste(Estimate, `2.5 %`, `97.5 %`, digits = 3),
+    Visit = factor(Visit,
+                   levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                   labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+  ) %>%
+  select(Visit, Ratio) %>%
+  right_join(qaicc_best_model_tab %>% filter(Model=='Allele') %>% select(-Model), by='Visit')
+
+```
+
+```{r MAKE-quasipoisson-diff-tab, results='asis', warning=FALSE}
+
+tab = lapply(names(fit), function(visit) {
+  model_final_in = fit[[visit]]$allele$quasipoisson
+  est = lincom(model_final_in,
+               c('*02 --- *04' = 'exposure_02 - exposure_04'))
+  est$Visit = visit
+  return(est)
+})
+tab = do.call(rbind, tab)
+tab = as_tibble(tab)
+
+quasipoisson_diff_tab = tab %>%
+  mutate(
+    Diff = stat_paste(Estimate * 100, `2.5 %` * 100, `97.5 %` * 100, digits = 3),
+    Pvalue = pretty_pvalues(
+      `Pr(>Chisq)`,
+      output_type = output_type,
+      sig_alpha = .05,
+      background = 'yellow',
+      bold = if_else(pandoc_markup , TRUE, FALSE),
+      italic = if_else(pandoc_markup , TRUE, FALSE),
+      digits = 4
+  ),
+  Visit = factor(Visit,
+                 levels=c('V06','V07','V08','V10','V05','V09','V07A'),
+                 labels=VisitLabels[c('V06','V07','V08','V10','V05','V09','V07A')])
+) %>%
+select(Visit, Diff, Pvalue) %>%
+# filter out visits when Allele model is not the best
+right_join(qaicc_best_model_tab %>% filter(Model=='Allele') %>% select(-Model), by='Visit')
+
+```
+
+
+```{r MAKE-mag-tab-vrc01-dose, results="asis", warning=kable_warnings}
+
+mag_tab_vrc01_dose = magnitude_results_dose %>%
+  select(genotype_grouped, Visit, Comparison,
+         `Sample Sizes` = SampleSizes, `Median (Range)`,
+         `Unadjusted` = MagnitudeTest, `FDR Adjusted` = MagnitudeTest_adj) %>%
+  arrange(genotype_grouped, Visit) %>%
+  mutate(Comparison = Comparison %>% str_replace_all('_', '\\\\_'))
+
+```
+
+
+
+
+
+```{r genotype-cnt-tab-supp, results="asis", warning=FALSE}
+kbl(genotype_cnt_tab,
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S1',
+    ) %>%
+  row_spec(3, hline_after = TRUE) %>%
+  kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header"))
+```
+
+
+
+```{r usage-tab-supp, results="asis", warning=FALSE}
+kbl(allele_usage_tab,
+    col.names = NULL,
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S2'
+  ) %>%
+add_header_above(c('Allele' = 2, 'n'=1, 'Mean'=1, `95% CI`=1, 'Min'=1, 'Max'=1), line = FALSE) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+row_spec(c(0,2,4,5), hline_after = TRUE)
+```
+
+
+
+```{r usage-comp-tab-supp, results='asis', warning=FALSE}
+kbl(usage_comp_tab,
+    col.names=NULL,
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S3'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+add_header_above(c(`Allele`=1, `Difference`=1, `95% CI`=1, `P-value`=1), line = FALSE) %>%
+row_spec(c(0,1), hline_after = TRUE)
+```
+
+\clearpage
+
+```{r mag-tab-vrc01-supp, results="asis", warning=FALSE}
+kbl(mag_tab_vrc01,
+    format = 'latex',
+    longtable = FALSE,
+    booktabs = TRUE,
+    linesep = "",
+    escape = FALSE,
+    caption = 'Table S4'
+  ) %>%
+  column_spec(3, width = '5.1cm') %>%
+  column_spec(4, width = '.9cm') %>%
+  column_spec(6:7, width = '1.1cm') %>%
+  kable_styling(
+    font_size = 6,
+    latex_options = c("hold_position", "repeat_header")
+  )  %>%
+  add_header_above(c(' ' = 5, 'P Value' = 2)) %>%
+  collapse_rows(1:2, latex_hline = 'full', headers_to_remove = 1:2,
+                row_group_label_position = 'stack')
+
+```
+
+\clearpage
+
+```{r mag-tab-vrc01-dose-supp, results="asis", warning=FALSE}
+kbl(mag_tab_vrc01_dose,
+    format = 'latex', 
+    longtable = FALSE, 
+    booktabs = TRUE,
+    linesep = "", 
+    escape = FALSE,
+    caption = 'Table S5'
+  ) %>%
+  column_spec(3, width = '5.1cm') %>% 
+  column_spec(4, width = '.9cm') %>% 
+  column_spec(6:7, width = '1.1cm') %>% 
+  kable_styling(
+    font_size = 6,
+    latex_options = c("hold_position", "repeat_header")
+  )  %>% 
+  add_header_above(c(' ' = 5, 'P Value' = 2)) %>% 
+  collapse_rows(1:2, latex_hline = 'full', headers_to_remove = 1:2,
+                row_group_label_position = 'stack')
+  
+```
+
+\clearpage
+
+```{r qaicc-tab-supp, results='asis', warning=FALSE}
+kbl(subset(qaicc_tab, select=-Visit),
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S6'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+pack_rows(index=table(qaicc_tab$Visit))
+```
+
+\clearpage
+
+```{r quasipoisson-fit-tab-supp, results='asis', warning=FALSE}
+kbl(subset(quasipoisson_fit_tab, select=-Visit),
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S7'
+) %>%
+kable_styling(latex_options = c("hold_position", "repeat_header", "scale_down")) %>%
+pack_rows(index=table(quasipoisson_fit_tab$Visit))
+```
+
+\clearpage
+
+```{r quasipoisson-genotype-tab-supp, results='asis', warning=FALSE}
+kbl(quasipoisson_genotype_tab %>% select(-Visit),
+    col.names = c('Genotype', 'Percent (95% CI)'),
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption='Table S8'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+pack_rows(index=table(factor(quasipoisson_genotype_tab$Visit)))
+```
+
+\clearpage
+
+```{r quasipoisson-ratio-tab-supp, results='asis', warning=FALSE}
+kbl(quasipoisson_ratio_tab,
+    col.names = c('Visit', 'Ratio (95% CI)'),
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption='Table S9'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header"))
+```
+
+\clearpage
+
+```{r quasipoisson-diff-tab-supp, results='asis', warning=FALSE}
+
+kbl(quasipoisson_diff_tab,
+    col.names=c('Visit', 'Difference (95\\% CI)', 'P Value'),
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = FALSE,
+    caption='Table S10'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header"))
+```
+
+\clearpage
+
+```{r ratio-tab-vacc-supp, results='asis', warning=FALSE}
+kbl(ratio_tab_vacc,
+    col.names=NULL,
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S11'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+add_header_above(c(`Frequency`=1, `Group`=1, `Ratio`=1, `95% CI`=1, `P-value`=1), line = TRUE) %>%
+row_spec(c(0,1), hline_after = FALSE)
+```
+
+\clearpage
+
+```{r bcr-usage-tab-comb-supp, results='asis', warning=FALSE}
+bcr_usage_tab_comb =  bcr_usage_tab %>%
+  filter(timepoint=='Combined')
+
+kbl(bcr_usage_tab_comb %>% select(-timepoint),
+    longtable=TRUE,
+    digits = 3,
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S12'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+row_spec(row=8,hline_after = TRUE)
+```
+
+\clearpage
+
+```{r bcr-usage-tab-timepoint-supp, results='asis', warning=FALSE}
+bcr_usage_tab =  bcr_usage_tab %>%
+  filter(timepoint!='Combined') %>%
+  mutate(
+    timepoint = fct_drop(timepoint, 'Combined')
+  )
+
+kbl(bcr_usage_tab %>% select(-timepoint),
+    longtable=TRUE,
+    digits = 3,
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = 'Table S13'
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+row_spec(row=cumsum(table(bcr_usage_tab$timepoint))-1,hline_after = TRUE) %>%
+row_spec(row=cumsum(table(bcr_usage_tab$timepoint)[-1]),hline_after = TRUE) %>%
+row_spec(row=36, extra_latex_after = ' \\hline \\pagebreak') %>%
+pack_rows(index=table(bcr_usage_tab$timepoint))
+```
+
+
+
+
+
