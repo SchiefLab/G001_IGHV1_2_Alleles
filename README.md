@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/675946766.svg)](https://zenodo.org/doi/10.5281/zenodo.10637702)
+
 This README file documents the contents of the "code" and "data" folders for the manuscript deCamp et al., npj Vaccines 2024, entitled "Human immunoglobulin gene allelic variation impacts germline-targeting vaccine priming".
 
 Principal Investigator: William Schief, PhD <br>
