@@ -5,7 +5,7 @@ Institution: Scripps Research <br>
 Email: schief@scripps.edu <br>
 
 # Code overview
-Note, the provided code accesses public datasets.  As a result, running the code will not exactly reproduce the results in deCamp et. al.  The differences are minor and do not impact interpretation of the results.
+Note, the provided code accesses a public dataset (Leggat et. al., Science 2022).  The analyses in deCamp et. al. were run before the public dataset was available. The values are identical between datasets for 95% (293 out of 307) samples where "Percent of IgG memory B cells detected as VRC01−class" is defined.  Of the 14 samples where the values differ, all but two differ by less than 2-fold.  As a result, the analyses presented in deCamp et. al. have minor differences compared to the results generated on the finalized dataset. Furthermore, these differences do not impact the interpretation of the results presented in deCamp et. al.
 
 The "code" folder contains IGHV1_2_G001_Allele_Manuscript.Rmd: 
 Generates analyses, figures, and tables.
