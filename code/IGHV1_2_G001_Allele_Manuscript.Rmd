@@ -1,7 +1,8 @@
 ---
 title: ""
 output: 
-  pdf_document
+  pdf_document:
+    keep_md: true
 header-includes: 
 - \usepackage{pdflscape}
 - \newcommand{\blandscape}{\begin{landscape}}
@@ -815,7 +816,7 @@ legend_barcodes = legend
 ```
 
 
-```{r composite-genotype-mrna-cdr3-plot, fig.pos = 'htbp', fig.width=11, fig.height=10, fig.cap='Composite Genotype-mRNA-HCDR3-Usage-Plot', warnings=FALSE} 
+```{r fig1, fig.pos = 'htbp', fig.width=11, fig.height=10, fig.cap='Composite Genotype-mRNA-HCDR3-Usage-Plot', warnings=FALSE} 
 
 g_genotype = p_genotype + xlab('') + theme(plot.margin = margin(c(0,0,0,30)))
 g_allele = p_allele + xlab('') + theme(plot.margin = margin(c(0,0,0,30)))
@@ -829,19 +830,19 @@ g_barcodes_b = p_barcodes_b + theme(legend.position = 'none')
 g_barcodes_c = p_barcodes_c + theme(legend.position = 'none') 
 g_barcodes_d = p_barcodes_d + theme(legend.position = 'none') 
 
-g_top = plot_grid(NULL,g_genotype, NULL, g_allele, NULL, g_imbalance, NULL, nrow=1, align='h', axis='tb', labels=c('A','','B','','C',''),
+g_top = plot_grid(NULL,g_genotype, NULL, g_allele, NULL, g_imbalance, NULL, nrow=1, align='h', axis='tb', labels=c('b','','c','','d',''),
                rel_widths = c(0.5,7.8,0.5,6.2,0.5,9,0.75))
-g_ll = plot_grid(plot_grid(NULL, p_mRNA_freq, labels=c('D',''), rel_widths = c(0.1,2)),
+g_ll = plot_grid(plot_grid(NULL, p_mRNA_freq, labels=c('e',''), rel_widths = c(0.1,2)),
                  plot_grid(NULL, g_barcodes_a, NULL,NULL, g_barcodes_b, 
                            rel_widths = c(0.14,1,0.005,0.095,1), nrow=1,
-                           align='h', axis='tb', labels=c('F','','','G','')), 
+                           align='h', axis='tb', labels=c('g','','','h','')), 
                  rel_heights = c(12,8),
                  nrow=2) %>%
        plot_grid(NULL, rel_widths = c(1,0.05))
-g_lr = plot_grid(plot_grid(NULL, p_cdr3_freq, labels=c('E'), rel_widths = c(0.1,2)),
+g_lr = plot_grid(plot_grid(NULL, p_cdr3_freq, labels=c('f'), rel_widths = c(0.1,2)),
                  plot_grid(NULL,g_barcodes_c, NULL,NULL, g_barcodes_d, 
                            rel_widths = c(0.14,1,0.05,0.05,1), nrow=1,
-                           align='h', axis='tb', labels=c('H','','','I','')), 
+                           align='h', axis='tb', labels=c('i','','','j','')), 
                  rel_heights = c(12,8),
                  nrow=2)  %>%
        plot_grid(NULL, rel_widths = c(1,0.05))
@@ -1001,9 +1002,11 @@ if( file.exists('../data/ratio_tab_boot_vacc_cdr3.RData') ) {
 
   ratio_tab_boot_vacc_cdr3 = data.frame(Group = c('Homozygote','Heterozygote'),
                    Ratio = c(ratio.est.vacc.cdr3, tt.hetero.vacc.cdr3$estimate),
-                   lci = c(ratio.boot.vacc.ci[1], tt.hetero.vacc.cdr3$conf.int[1]),
+                   lci = c(ratio.boot.vacc.cdr3.ci[1], tt.hetero.vacc.cdr3$conf.int[1]),
                    uci = c(ratio.boot.vacc.cdr3.ci[2], tt.hetero.vacc.cdr3$conf.int[2]),
-                   pval = c(ratio.boot.vacc.cdr3.pval, sprintf('%0.4f', tt.hetero.vacc.cdr3$p.value)))
+                   pval = c(ratio.boot.vacc.cdr3.pval, 
+                            ifelse(tt.hetero.vacc.cdr3$p.value < 1/BOOT, sprintf('<%0.1g', 1/BOOT), tt.hetero.vacc.cdr3$p.value)))
+
 
   save(ratio_tab_boot_vacc_cdr3, file='../data/ratio_tab_boot_vacc_cdr3.RData')
 }
@@ -1157,7 +1160,7 @@ qaicc_best_model_tab = qaicc_tab %>%
 
 
 \blandscape
-```{r quasipoisson-genotype-plot-comb4, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.scap="Allele model estimates by genotype", fig.cap= "Allele model estimates by genotype.", warning=F}
+```{r fig2, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.scap="Allele model estimates by genotype", fig.cap= "Allele model estimates by genotype.", warning=F}
 
 est_info = lapply(names(fit), function(visit) {
   est = genotype_est_fun(fit[[visit]]$allele$quasipoisson)
@@ -1436,7 +1439,7 @@ bcr_usage_tab = bind_rows(tab, meds) %>%
 
 
 
-```{r comb-ratio-plot2, fig.width=7, fig.height=8.5, fig.scap='Ratio estimates', fig.cap='Ratio estimates', warning=FALSE}
+```{r fig3, fig.width=7, fig.height=8.5, fig.scap='Ratio estimates', fig.cap='Ratio estimates', warning=FALSE}
 
 rtab = lapply(names(fit), function(visit) {
   est = ratio_est_fun(fit[[visit]]$allele$quasipoisson)
@@ -1532,14 +1535,14 @@ p2 = ggplot(subset(comb_rtab, set=='mRNA'), aes(x=Ratio, y=row)) +
   coord_cartesian(clip = 'off') +
   facet_grid(set~.)
 
-set.seed(1)
+set.seed(1) 
 p3 = ggplot(subset(comb_rtab, set=='HCDR3'), aes(x=Ratio, y=row)) +
   geom_point(data=data_hcdr3_vacc,
              aes(y=rep(subset(comb_rtab, set=='HCDR3' & Label=='Heterozygote')$row, nrow(data_hcdr3_vacc)),
                  x=ratio,
                   shape=trt,
                   color=trt),
-            position = position_jitterdodge( jitter.width=0.5, jitter.height=0, dodge.width = 1, seed=12),
+            position = position_jitterdodge( jitter.width=0.5, jitter.height=0, dodge.width = 1, seed=1),
             size=2
   ) +
   scale_color_manual(name='', labels=levels(data_hcdr3_vacc$trt), values = trt_colors[levels(data_hcdr3_vacc$trt)]) +
@@ -1592,12 +1595,12 @@ p30 = p3 + theme(legend.position='none',
                  plot.margin = margin(c(0,0,10,0)))
 p40 = p4 + theme(plot.margin = margin(c(0,0,10,0)))
 
-plot_grid(p10, p20, p30, p40, legend, ncol=1, align='v', axis='lr', labels=LETTERS[1:4], vjust = 0, rel_heights = c(5,2,2,1.7, 0.5)) + theme(plot.margin = margin(c(10,0,0,0)))
+plot_grid(p10, p20, p30, p40, legend, ncol=1, align='v', axis='lr', labels=letters[1:4], vjust = 0, rel_heights = c(5,2,2,1.7, 0.5)) + theme(plot.margin = margin(c(10,0,0,0)))
 ```
 
 
 \blandscape
-```{r naive-rep-vrc01-resp-correlations-v2-with-week11, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.cap='Naive vs. VRC01 response correlations', warning=FALSE}
+```{r fig4, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.cap='Naive vs. VRC01 response correlations', warning=FALSE}
 
 plot_data = bcell_adata %>%
   mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
@@ -1738,7 +1741,7 @@ plot_grid(p, legend, ncol=1, rel_heights = c(10,1))
 \elandscape
 
 \blandscape
-```{r naive-rep-vrc01-resp-correlations-v3-with-week11, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.cap='Naive vs. VRC01 response correlations', warning=FALSE}
+```{r fig3S, fig.pos = 'htbp', fig.height=7, fig.width=8, fig.cap='Naive vs. VRC01 response correlations', warning=FALSE}
 
 plot_data = bcell_adata %>%
   mutate(Treatment = factor(Treatment, levels=names(TreatmentLabels), labels=TreatmentLabels),
@@ -1959,7 +1962,7 @@ quasipoisson_fit_tab = quasipoisson_fit_ptab %>%
 
 
 \blandscape
-```{r qaicc-with-quasipoisson-fit-plot, fig.pos = 'htbp', fig.scap="Quasipoisson fit plot", fig.cap="Quasipoisson fit plot", warning=F}
+```{r fig2S, fig.pos = 'htbp', fig.scap="Quasipoisson fit plot", fig.cap="Quasipoisson fit plot", warning=F}
 
 qaicc_ptab = qaicc_tab %>%
   mutate(x = as.numeric(Visit)) %>%
@@ -2018,7 +2021,7 @@ grob = ggplotGrob(p2+theme(panel.spacing.x = unit(2, 'pt')))
 labs = plot_grid(gtable::gtable_filter(grob, 'strip-t')) + theme(plot.margin = margin())
 p10 = p1 + theme(plot.margin = margin())
 p20 = p2 + theme(plot.margin = margin())
-plot_grid(labs, p10, NULL, p20, ncol=1, labels=c('A','','','B'),
+plot_grid(labs, p10, NULL, p20, ncol=1, labels=c('a','','','b'),
           align='v', axis='rl', rel_heights=c(0.3,1,0.15,4), vjust=c(1.2,1.2), hjust = 1.5) +
   theme(plot.margin = margin(c(0,0,0,20)))
 
@@ -2131,6 +2134,8 @@ mag_tab_vrc01_dose = magnitude_results_dose %>%
 
 
 ```{r genotype-cnt-tab-supp, results="asis", warning=FALSE}
+save(genotype_cnt_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/genotype_cnt_tab.RData')
+
 kbl(genotype_cnt_tab,
     format = 'latex',
     booktabs = TRUE,
@@ -2145,6 +2150,8 @@ kbl(genotype_cnt_tab,
 
 
 ```{r usage-tab-supp, results="asis", warning=FALSE}
+save(allele_usage_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/allele_usage_tab.RData')
+
 kbl(allele_usage_tab,
     col.names = NULL,
     format = 'latex',
@@ -2161,6 +2168,8 @@ row_spec(c(0,2,4,5), hline_after = TRUE)
 
 
 ```{r usage-comp-tab-supp, results='asis', warning=FALSE}
+save(usage_comp_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/usage_comp_tab.RData')
+
 kbl(usage_comp_tab,
     col.names=NULL,
     format = 'latex',
@@ -2177,6 +2186,8 @@ row_spec(c(0,1), hline_after = TRUE)
 \clearpage
 
 ```{r mag-tab-vrc01-supp, results="asis", warning=FALSE}
+save(mag_tab_vrc01, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/mag_tab_vrc01.RData')
+
 kbl(mag_tab_vrc01,
     format = 'latex',
     longtable = FALSE,
@@ -2201,6 +2212,8 @@ kbl(mag_tab_vrc01,
 \clearpage
 
 ```{r mag-tab-vrc01-dose-supp, results="asis", warning=FALSE}
+save(mag_tab_vrc01_dose, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/mag_tab_vrc01_dose.RData')
+
 kbl(mag_tab_vrc01_dose,
     format = 'latex', 
     longtable = FALSE, 
@@ -2225,6 +2238,8 @@ kbl(mag_tab_vrc01_dose,
 \clearpage
 
 ```{r qaicc-tab-supp, results='asis', warning=FALSE}
+save(qaicc_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/qaicc_tab.RData')
+
 kbl(subset(qaicc_tab, select=-Visit),
     format = 'latex',
     booktabs = TRUE,
@@ -2239,6 +2254,8 @@ pack_rows(index=table(qaicc_tab$Visit))
 \clearpage
 
 ```{r quasipoisson-fit-tab-supp, results='asis', warning=FALSE}
+save(quasipoisson_fit_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_fit_tab.RData')
+
 kbl(subset(quasipoisson_fit_tab, select=-Visit),
     format = 'latex',
     booktabs = TRUE,
@@ -2253,6 +2270,8 @@ pack_rows(index=table(quasipoisson_fit_tab$Visit))
 \clearpage
 
 ```{r quasipoisson-genotype-tab-supp, results='asis', warning=FALSE}
+save(quasipoisson_genotype_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_genotype_tab.RData')
+
 kbl(quasipoisson_genotype_tab %>% select(-Visit),
     col.names = c('Genotype', 'Percent (95% CI)'),
     format = 'latex',
@@ -2268,6 +2287,8 @@ pack_rows(index=table(factor(quasipoisson_genotype_tab$Visit)))
 \clearpage
 
 ```{r quasipoisson-ratio-tab-supp, results='asis', warning=FALSE}
+save(quasipoisson_ratio_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_ratio_tab.RData')
+
 kbl(quasipoisson_ratio_tab,
     col.names = c('Visit', 'Ratio (95% CI)'),
     format = 'latex',
@@ -2282,6 +2303,7 @@ kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header"
 \clearpage
 
 ```{r quasipoisson-diff-tab-supp, results='asis', warning=FALSE}
+save(quasipoisson_diff_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_diff_tab.RData')
 
 kbl(quasipoisson_diff_tab,
     col.names=c('Visit', 'Difference (95\\% CI)', 'P Value'),
@@ -2297,6 +2319,8 @@ kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header"
 \clearpage
 
 ```{r ratio-tab-vacc-supp, results='asis', warning=FALSE}
+save(ratio_tab_vacc, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/ratio_tab_vacc.RData')
+
 kbl(ratio_tab_vacc,
     col.names=NULL,
     format = 'latex',
@@ -2313,6 +2337,8 @@ row_spec(c(0,1), hline_after = FALSE)
 \clearpage
 
 ```{r bcr-usage-tab-comb-supp, results='asis', warning=FALSE}
+save(bcr_usage_tab, file='./IGHV1_2_G001_Allele_Manuscript_files/RData/bcr_usage_tab.RData')
+
 bcr_usage_tab_comb =  bcr_usage_tab %>%
   filter(timepoint=='Combined')
 

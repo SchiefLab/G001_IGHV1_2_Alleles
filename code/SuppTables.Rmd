@@ -1,0 +1,298 @@
+---
+title: ""
+output: 
+  pdf_document
+fontsize: 10pt
+
+header-includes: \usepackage{caption} \captionsetup[table]{labelformat=empty} \captionsetup[figure]{labelformat=empty}
+
+---
+\pagenumbering{gobble}
+
+```{r, eval=FALSE, echo=FALSE}
+#Use the following code to extract pages into individual files
+
+sapply(1:14, function(pagenum) {
+  pdftools::pdf_subset('IGHV1_2_Allele_Paper_Supp_Tables.pdf',
+                       pages=pagenum,
+                       output =sprintf('./PDF_pages/table%02d.pdf', pagenum))
+})
+
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# NA's will be blank in tables
+options(knitr.kable.NA = '')
+```
+
+```{r package-loading-and-options, include=FALSE}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+```
+
+```{r captions}
+
+Table_S1 = r'{\textbf{Supplementary Table 1:} IGHV1-2 genotype counts by treatment group.}'
+Table_S2 = '\\textbf{Supplementary Table 2:} Frequency of IGHV1-2 mRNA expression in the naive repertoire. The number of trial participants (n), mean, 95\\% confidence interval (95\\% CI), minimum (Min) and maximum (Max) are reported for groups defined by homozygous or heterozygous genotypes including each allele. For participants homozygous for an allele, the per-allele frequency is defined as half the measured frequency of that allele. For $^*$02/$^*$02\\_S4953 participants, the per-allele usage frequency is defined as half of the sum of the $^*$02 and $^*$02\\_S4953 frequencies and the participant is classified as a $^*$02 homozygote.'
+Table_S3 = r'{\textbf{SupplementaryTable 3:} Estimated difference in the mean per-allele frequency of IGHV1-2 mRNA expression between participants homozygotes and heterozygotes for each allele. For participants homozygous for an allele, the per-allele frequency is defined as half the measured frequency of that allele. The 95\% confidence interval and P-value are based on a T-test for the null hypothesis that the true difference (mean among homozygous minus mean among heterzygous) is 0\%.}'
+Table_S4 = r'{\textbf{Supplementary Table 4:} Percent of IgG B cells detected as VRC01-class testing between genotype groups among detectable response participants. Comparisons with at least 2 samples per group are included and P-values displayed for comparisons with at least 3 samples per group. Testing was done using the Wilcoxon rank-sum test (two-sided, $\alpha$ = 0.05) and P-values less than 0.05 are highlighted. Median, minimum, and maximum values are presented by treatment group and time point. Unadjusted and FDR adjusted P-values displayed.}'
+Table_S5 = r'{\textbf{Supplementary Table 5:} Percent of IgG B cells detected as VRC01-class testing between treatment groups among detectable response participants. Comparisons with at least 2 samples per group are included and P-values displayed for comparisons with at least 3 samples per group. Testing was done using the Wilcoxon rank-sum test (two-sided, $\alpha$ = 0.05) and P-values less than 0.05 are highlighted. Median, minimum, and maximum values are presented by treatment group and time point. Unadjusted and FDR adjusted P-values displayed.}'
+Table_S6 = r'{\textbf{Supplementary Table 6:} Quasi-likelihood version of Akaike’s second-order information criterion (QAICc) results. At each sample time point, the four models (Null, Dose, Allele, and Full) are ranked best-to-worst (lower QAICc is better). Each row gives the number of samples analyzed (n), the number of model parameters (K), the log-likelihood (LL) from a Poisson model fit, and the dispersion (Dispersion) from a quasi-Poisson model fit. The QAICc is computed based on these values (see Methods). }'
+Table_S7 = r'{\textbf{Supplementary Table 7:} Parameter estimates and 95\% confidence intervals (CIs) from each model (Allele, Full, Dose, and Null) fit using a quasi-Poisson distribution are organized by sample time point. Abreviated parameter names, Delta, Low and Vacc., are used for the full parameter names defined in the Methods section, Dose delta (100$\mu$g - 20$\mu$g), Dose=20$\mu$g, and Vaccine pooled (a single estimate from the Null model for the vaccine dose groups pooled), respectively.}'
+Table_S8 = r'{\textbf{Supplementary Table 8:} Model estimates and 95\% confidence intervals (CIs) from the Allele model for each genotype and time point. The estimated percent (and CI) of IgG B cells that are VRC01-class for each genotype are organized by time point. Genotypes containing the *05 and *06 alleles are grouped (e.g., $^*$02/$^*$05 or $^*$02/$^*$06) since the estimated mean response from the Allele model depends only on the count of $^*$02 and $^*$04 alleles. Week 11 germinal center (GC) results are not shown since the Null model ranked better than the Allele model for that time point.}'
+Table_S9 = r'{\textbf{Supplementary Table 9:} Ratio and 95\% confidence interval (CI) estimates from the Allele model for the relative contribution of alleles $^*$02 and $^*$04 to the post-vaccination VRC01-class B cell frequencies. Week 11 germinal center (GC) results are not shown since the Null model ranked better than the Allele model for that time point.}'
+Table_S10 = r'{\textbf{Supplementary Table 10:} Difference and 95\% confidence interval (CI) estimates from the Allele model for the relative contribution of alleles $^*$02 and $^*$04 to the post-vaccination VRC01-class B cell frequencies. Week 11 germinal center (GC) results are not shown since the Null model ranked better than the Allele model for that time point.}'
+Table_S11 = r'{\textbf{Supplementary Table 11:} Ratio estimates and 95\% confidence intervals (CIs) of the relative contributions of alleles $^*$02 and $^*$04 to the naive repertoire. Estimates, 95\% CIs and P-values are based on the frequency of mRNA expression and unique HCRD3s among vaccine recipients with homozygous genotypes ($^*$02/$^*$02 and $^*$04/$^*$04) or heterozygous genotype $^*$02/$^*$04 as described in the Methods section.}'
+Table_S12 = r'{\textbf{Supplementary Table 12:} Ratio of inferred-germline B cell receptor (BCR) assignment among VRC01-class B cells for eight heterozygous IGHV1-2 $^*$02/$^*$04 vaccine recipients combined across time points. The median of these eight ratios is also reported. Four of 873 assignments were ambiguous and were given one half weight to each allele.}'
+Table_S13 = r'{\textbf{Supplementary Table 13:} Ratio of inferred-germline B cell receptor (BCR) assignment among VRC01-class B cells for eight heterozygous IGHV1-2 $^*$02/$^*$04 vaccine recipients organized by time point. The median ratio is also reported for each time point. Four of 873 assignments were ambiguous and were given one half weight to each allele.}'
+
+```
+
+
+```{r genotype-cnt-tab, results="asis", warning=FALSE}
+load('./IGHV1_2_G001_Allele_Manuscript_files/RData/genotype_cnt_tab.RData')
+
+kbl(genotype_cnt_tab, 
+    format = 'latex', 
+    booktabs = TRUE, 
+    linesep = '',
+    escape = TRUE,
+    caption = Table_S1,
+    ) %>% 
+  row_spec(3, hline_after = TRUE) %>%
+  kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header"))
+```
+
+
+```{r usage-tab, results="asis", warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/allele_usage_tab.RData')
+
+kbl(allele_usage_tab, 
+    col.names = NULL, 
+    format = 'latex', 
+    booktabs = TRUE, 
+    linesep = '', 
+    escape = TRUE,
+    caption = Table_S2
+  ) %>% 
+add_header_above(c('Allele' = 2, 'n'=1, 'Mean'=1, `95% CI`=1, 'Min'=1, 'Max'=1), line = FALSE) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+row_spec(c(0,2,4,5), hline_after = TRUE)
+```
+
+
+```{r usage-comp-tab, results='asis', warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/usage_comp_tab.RData')
+
+kbl(usage_comp_tab, 
+    col.names=NULL, 
+    format = 'latex', 
+    booktabs = TRUE,
+    linesep = '', 
+    escape = TRUE,
+    caption = Table_S3
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>% 
+add_header_above(c(`Allele`=1, `Difference`=1, `95% CI`=1, `P-value`=1), line = FALSE) %>%
+row_spec(c(0,1), hline_after = TRUE)
+```
+
+\clearpage
+
+```{r mag-tab-vrc01, results="asis", warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/mag_tab_vrc01.RData')
+
+kbl(mag_tab_vrc01,
+    format = 'latex', 
+    longtable = FALSE, 
+    booktabs = TRUE,
+    linesep = "", 
+    escape = FALSE,
+    caption = Table_S4
+  ) %>%
+  column_spec(3, width = '5.1cm') %>% 
+  column_spec(4, width = '.9cm') %>% 
+  column_spec(6:7, width = '1.1cm') %>% 
+  kable_styling(
+    font_size = 4,
+    latex_options = c("hold_position", "repeat_header")
+  )  %>% 
+  add_header_above(c(' ' = 5, 'P Value' = 2)) %>% 
+  collapse_rows(1:2, latex_hline = 'full', headers_to_remove = 1:2,
+                row_group_label_position = 'stack')
+  
+```
+
+\clearpage
+
+```{r mag-tab-vrc01-dose, results="asis", warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/mag_tab_vrc01_dose.RData')
+
+kbl(mag_tab_vrc01_dose,
+    format = 'latex', 
+    longtable = FALSE, 
+    booktabs = TRUE,
+    linesep = "", 
+    escape = FALSE,
+    caption = Table_S5
+  ) %>%
+  column_spec(3, width = '2.5cm') %>% 
+  column_spec(4, width = '.9cm') %>% 
+  column_spec(6:7, width = '1.1cm') %>% 
+  kable_styling(
+    font_size = 7,
+    latex_options = c("hold_position", "repeat_header")
+  )  %>% 
+  add_header_above(c(' ' = 5, 'P Value' = 2)) %>% 
+  collapse_rows(1:2, latex_hline = 'full', headers_to_remove = 1:2,
+                row_group_label_position = 'stack')
+  
+```
+
+
+```{r qaicc-tab, results='asis', warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/qaicc_tab.RData')
+
+kbl(subset(qaicc_tab, select=-Visit),
+    format = 'latex',
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = Table_S6
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+pack_rows(index=table(qaicc_tab$Visit))
+```
+
+\clearpage
+
+```{r quasipoisson-fit-tab, results='asis', warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_fit_tab.RData')
+
+kbl(subset(quasipoisson_fit_tab, select=-Visit), 
+    format = 'latex', 
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption = Table_S7
+) %>%
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header", "scale_down")) %>%
+pack_rows(index=table(quasipoisson_fit_tab$Visit))
+```
+
+\clearpage
+
+```{r quasipoisson-genotype-tab, results='asis', warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_genotype_tab.RData')
+
+kbl(quasipoisson_genotype_tab %>% select(-Visit),
+    col.names = c('Genotype', 'Percent (95% CI)'),
+    format = 'latex', 
+    booktabs = TRUE, 
+    linesep = '', 
+    escape = TRUE,
+    caption=Table_S8
+) %>% 
+kable_styling(font_size = 7, latex_options = c("hold_position", "repeat_header")) %>%
+pack_rows(index=table(factor(quasipoisson_genotype_tab$Visit)))
+```
+
+
+```{r quasipoisson-ratio-tab, results='asis', warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_ratio_tab.RData')
+
+kbl(quasipoisson_ratio_tab, 
+    col.names = c('Visit', 'Ratio (95% CI)'),
+    format = 'latex', 
+    booktabs = TRUE,
+    linesep = '',
+    escape = TRUE,
+    caption=Table_S9
+) %>% 
+kable_styling(font_size = 7, latex_options = c("hold_position", "repeat_header"))
+```
+
+\clearpage
+
+```{r quasipoisson-diff-tab, results='asis', warning=FALSE}
+
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/quasipoisson_diff_tab.RData')
+
+kbl(quasipoisson_diff_tab, 
+    col.names=c('Visit', 'Difference (95\\% CI)', 'P Value'),
+    format = 'latex', 
+    booktabs = TRUE, 
+    linesep = '', 
+    escape = FALSE,
+    caption=Table_S10
+) %>% 
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header"))
+```
+
+
+```{r ratio-tab-vacc, results='asis', warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/ratio_tab_vacc.RData')
+
+kbl(ratio_tab_vacc, 
+    col.names=NULL, 
+    format = 'latex', 
+    booktabs = TRUE,
+    linesep = '', 
+    escape = TRUE,
+    caption = Table_S11
+) %>% 
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>% 
+add_header_above(c(`Frequency`=1, `Group`=1, `Ratio`=1, `95% CI`=1, `P-value`=1), line = TRUE) %>%
+row_spec(c(0,1), hline_after = FALSE)
+```
+
+
+```{r bcr-usage-tab-comb, results='asis', warning=FALSE}
+load(file='./IGHV1_2_G001_Allele_Manuscript_files/RData/bcr_usage_tab.RData')
+
+bcr_usage_tab_comb =  bcr_usage_tab %>%
+  filter(timepoint=='Combined')
+
+kbl(bcr_usage_tab_comb %>% select(-timepoint), 
+    longtable=TRUE,
+    digits = 3,
+    format = 'latex', 
+    booktabs = TRUE, 
+    linesep = '', 
+    escape = TRUE,
+    caption = Table_S12
+) %>% 
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+row_spec(row=8,hline_after = TRUE) 
+```
+
+\clearpage
+
+```{r bcr-usage-tab-timepoint, results='asis', warning=FALSE}
+bcr_usage_tab =  bcr_usage_tab %>%
+  filter(timepoint!='Combined') %>%
+  mutate(
+    timepoint = fct_drop(timepoint, 'Combined')
+  )
+
+kbl(bcr_usage_tab %>% select(-timepoint), 
+    longtable=TRUE,
+    digits = 3,
+    format = 'latex', 
+    booktabs = TRUE, 
+    linesep = '', 
+    escape = TRUE,
+    caption = Table_S13
+) %>% 
+kable_styling(font_size = 10, latex_options = c("hold_position", "repeat_header")) %>%
+row_spec(row=cumsum(table(bcr_usage_tab$timepoint))-1,hline_after = TRUE) %>%
+row_spec(row=cumsum(table(bcr_usage_tab$timepoint)[-1]),hline_after = TRUE) %>%
+row_spec(row=36, extra_latex_after = ' \\hline \\pagebreak') %>% 
+pack_rows(index=table(bcr_usage_tab$timepoint))
+```
+
+
